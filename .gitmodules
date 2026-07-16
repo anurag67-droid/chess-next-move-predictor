@@ -1,0 +1,12 @@
+[submodule "third_party/chess.hpp"]
+	path = third_party/chess.hpp
+	url = https://github.com/Disservin/chess-library.git
+[submodule "third_party/sfml"]
+	path = third_party/sfml
+	url = https://github.com/SFML/SFML.git
+[submodule "third_party/imgui"]
+	path = third_party/imgui
+	url = https://github.com/ocornut/imgui.git
+[submodule "third_party/imgui-sfml"]
+	path = third_party/imgui-sfml
+	url = https://github.com/SFML/imgui-sfml.git
