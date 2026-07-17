@@ -10,7 +10,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -march=native")
 
 # 1. FIND HARDWARE ACCELERATED GRAPHICS (SFML)
-find_package(SFML 2.5 COMPONENTS graphics window system REQUIRED)
+find_package(SFML 3.0 COMPONENTS Graphics Window System REQUIRED)
 
 # 2. CONFIGURE THIRD-PARTY ENGINE COMPONENT LIBRARIES
 set(THIRD_PARTY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
@@ -41,8 +41,10 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${IMGUI_DIR}
     ${IMGUI_SFML_DIR}
 )
+find_package(OpenGL REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE
-    sfml-graphics
-    sfml-window
-    sfml-system
+    SFML::Graphics
+    SFML::Window
+    SFML::System
+    OpenGL::GL
 )
