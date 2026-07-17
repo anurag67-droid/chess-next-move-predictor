@@ -8,7 +8,7 @@ BoardRenderer::BoardRenderer()
       m_boardOffset(50.0f, 50.0f),
       m_pieceSprite(m_pieceTexture) 
 {
-    if (!m_pieceTexture.loadFromFile("../assets/pieces/pieces.png")) std::cerr << "Failed to load piece texture!" << std::endl;
+    if (!m_pieceTexture.loadFromFile("../assets/pieces.png")) std::cerr << "Failed to load piece texture!" << std::endl;
     if (!m_font.openFromFile("../assets/font.ttf")) std::cerr << "Warning: Could not load coordinate font!" << std::endl;
     m_pieceTexture.setSmooth(true);
     sf::Vector2u texSize = m_pieceTexture.getSize();
