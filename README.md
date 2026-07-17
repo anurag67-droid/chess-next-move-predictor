@@ -146,8 +146,8 @@ chess-next-move-predictor/
 │   │   ├── evaluation.hpp
 │   │   └── search.hpp
 │   └── gui/
-│   │   ├── application.hpp
-│   │   └── board_renderer.hpp
+│       ├── application.hpp
+│       └── board_renderer.hpp
 ├── src/
 │   ├── core/
 │   │   └── board.cpp
