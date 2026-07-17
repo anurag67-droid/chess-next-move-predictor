@@ -7,7 +7,7 @@
 Featuring Alpha-Beta Pruning, Iterative Deepening, Quiescence Search, and Transposition Tables for real-time move prediction.
 
 [![C++17](https://img.shields.io/badge/C++-17-00599C?logo=c%2B%2B)](https://en.cppreference.com/w/cpp/17)
-[![SFML](https://img.shields.io/badge/Graphics-SFML%203-8CC445)](https://www.sfml-dev.org/)
+[![SFML](https://img.shields.io/badge/Graphics-SFML%203-8CC445)](https://github.com/sfml/sfml)
 [![ImGui](https://img.shields.io/badge/UI-%20ImGui-9146FF)](https://github.com/ocornut/imgui)
 [![Chess](https://img.shields.io/badge/Backend-chess.hpp-black)](https://github.com/Disservin/chess-library)
 
