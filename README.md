@@ -185,7 +185,7 @@ Before building the project, ensure the following dependencies are installed:
 
 ```bash
 # Clone the repository
-git clone https://github.com/<your-username>/chess-next-move-predictor.git
+git clone https://github.com/anurag67-droid/chess-next-move-predictor.git
 
 cd chess-next-move-predictor
 
@@ -237,6 +237,7 @@ These logs demonstrate how Iterative Deepening progressively refines the engine'
 - No opening book or endgame tablebases.
 - Single-threaded search.
 - Less king safety precautions other than castling.
+- En passant
 ---
 
 ## Possible Future Improvements
@@ -245,5 +246,5 @@ These logs demonstrate how Iterative Deepening progressively refines the engine'
 - Killer Move & History heuristics
 - Multi-threaded search
 - Opening book & Endgame tablebases
-
+- En passant
 ---
