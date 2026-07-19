@@ -233,18 +233,20 @@ These logs demonstrate how Iterative Deepening progressively refines the engine'
 
 ## Current Limitations
 
-- Evaluation majorly relies on center and material advantage.
-- No opening book or endgame tablebases.
-- Single-threaded search.
-- Less king safety precautions other than castling.
+- High execution time hence less depth
+- No opening or endgame data
+- Sometimes evaluation overly relies on material advantage, even ignoring positional advantage or brilliancy (atk/def both)
+- Less king safety precautions (only castle, mid/endgame behaviour and pawn shielding.)
+- Single-threaded search
 - En passant
 ---
 
 ## Possible Future Improvements
 
-- King safety evaluation
-- Killer Move & History heuristics
+- Optimization
+- Standard Opening & Endgame data
+- Killer Move & History heuristics & defensive measures
+- More King safety
 - Multi-threaded search
-- Opening book & Endgame tablebases
 - En passant
 ---
