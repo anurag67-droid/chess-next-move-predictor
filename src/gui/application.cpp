@@ -102,10 +102,10 @@ void Application::update(sf::Time dt) {
     ImGui::Separator();
     // -1.0f forces the button to fill the width. We also scale the height so it stays chunky!
     if (ImGui::Button("Predict Best Next Move (2s Limit)", ImVec2(-1.0f, 35.0f * scaleFactor))){
-        std::string bestMove = engine::getBestMoveTime(m_board.getInternalBoard(), 2000);
+        std::string bestMove = engine::getBestMoveTime(m_board.getInternalBoard(), 6000);
         m_board.tryMove(bestMove);
         m_moveHistory.push_back(bestMove);
-        updateEvaluation(); // update eval bar
+        updateEvaluation();
     }
 
     // ---MOVE LOGGER UI---
