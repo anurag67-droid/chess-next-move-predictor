@@ -17,6 +17,7 @@ struct TTEntry {
     int depth = -1;
     int score = 0;
     HashFlag flag = HASH_EXACT;
+    chess::Move bestMove = chess::Move(0);
 };
 const int TT_SIZE = 1000000;
 std::vector<TTEntry> transpositionTable(TT_SIZE);
@@ -107,34 +108,73 @@ int minimax(chess::Board& board, int depth, int alpha, int beta, bool isMaximizi
     if (timeIsUp) return 0;
     // draw detection
     if (board.isRepetition() || board.isHalfMoveDraw() || board.isInsufficientMaterial()) return 0;
+    
     uint64_t hash = board.zobrist();
     int ttIndex = hash % TT_SIZE;
     TTEntry& ttEntry = transpositionTable[ttIndex];
+    chess::Move ttMove = chess::Move(0);
 
-    if (ttEntry.zobristKey == hash && ttEntry.depth >= depth) {
-        if (ttEntry.flag == HASH_EXACT) return ttEntry.score;
-        if (ttEntry.flag == HASH_ALPHA && ttEntry.score <= alpha) return alpha;
-        if (ttEntry.flag == HASH_BETA && ttEntry.score >= beta) return beta;
+    if (ttEntry.zobristKey == hash) {
+        ttMove = ttEntry.bestMove;
+        if (ttEntry.depth >= depth) {
+            if (ttEntry.flag == HASH_EXACT) return ttEntry.score;
+            if (ttEntry.flag == HASH_ALPHA && ttEntry.score <= alpha) return alpha;
+            if (ttEntry.flag == HASH_BETA && ttEntry.score >= beta) return beta;
+        }
     }
+
     if (depth == 0) return quiescence(board, alpha, beta, isMaximizing);
+
+    bool inCheck = board.inCheck();
+    
+    // Null Move Pruning
+    if (depth >= 3 && !inCheck) {
+        board.makeNullMove();
+        int nullScore = 0;
+        if (isMaximizing) {
+            nullScore = minimax(board, depth - 3, beta - 1, beta, false);
+            board.unmakeNullMove();
+            if (timeIsUp) return 0;
+            if (nullScore >= beta) return beta;
+        } else {
+            nullScore = minimax(board, depth - 3, alpha, alpha + 1, true);
+            board.unmakeNullMove();
+            if (timeIsUp) return 0;
+            if (nullScore <= alpha) return alpha;
+        }
+    }
+
     chess::Movelist moves;
     chess::movegen::legalmoves(moves, board);
     if (moves.empty()){
-        if (board.inCheck()) return isMaximizing ? -20000 : 20000; 
+        if (inCheck) return isMaximizing ? -20000 : 20000; 
         return 0;//stalemate
     }
+
     int originalAlpha = alpha;
-    std::sort(moves.begin(), moves.end(), [&board](const chess::Move& a, const chess::Move& b){
-        return scoreMove(board, a) > scoreMove(board, b);
+    
+    auto scoreMoveForSort = [&board, ttMove](const chess::Move& move) {
+        if (move == ttMove) return 1000000;
+        return scoreMove(board, move);
+    };
+
+    std::sort(moves.begin(), moves.end(), [&scoreMoveForSort](const chess::Move& a, const chess::Move& b){
+        return scoreMoveForSort(a) > scoreMoveForSort(b);
     });
+
     int bestScore = isMaximizing ? -99999 : 99999; 
+    chess::Move bestMoveInPos = chess::Move(0);
+
     if (isMaximizing) { 
         for (const auto& move : moves) {
             board.makeMove(move);
             int score = minimax(board, depth - 1, alpha, beta, false);
             board.unmakeMove(move); 
             if (timeIsUp) return 0;
-            if (score > bestScore) bestScore = score;
+            if (score > bestScore) {
+                bestScore = score;
+                bestMoveInPos = move;
+            }
             if (score > alpha) alpha = score;
             if (beta <= alpha) break; 
         }
@@ -145,17 +185,23 @@ int minimax(chess::Board& board, int depth, int alpha, int beta, bool isMaximizi
             int score = minimax(board, depth - 1, alpha, beta, true);
             board.unmakeMove(move);
             if (timeIsUp) return 0;
-            if (score < bestScore) bestScore = score;
+            if (score < bestScore) {
+                bestScore = score;
+                bestMoveInPos = move;
+            }
             if (score < beta) beta = score;
             if (beta <= alpha) break; 
         }
     }  
+    
     ttEntry.zobristKey = hash;
     ttEntry.depth = depth;
     ttEntry.score = bestScore;
+    ttEntry.bestMove = bestMoveInPos;
     if (bestScore <= originalAlpha) ttEntry.flag = HASH_ALPHA; 
     else if (bestScore >= beta) ttEntry.flag = HASH_BETA;  
     else ttEntry.flag = HASH_EXACT;
+    
     return bestScore;
 }
 
@@ -171,12 +217,23 @@ std::string getBestMoveTime(chess::Board board, int timeLimitMs) {
         return scoreMove(board, a) > scoreMove(board, b);
     });
     std::string overallBestMove = "";
+    chess::Move prevBestMove = chess::Move(0);
     bool isWhite = (board.sideToMove() == chess::Color::WHITE);  
+    
     for (int currentDepth = 1; currentDepth <= 64; currentDepth++) {
         int alpha = -99999;
         int beta = 99999;
         int bestScore = isWhite ? -99999 : 99999;
-        std::string currentDepthBestMove = "";       
+        std::string currentDepthBestMove = "";
+        chess::Move currentBestMoveObj = chess::Move(0);
+
+        if (prevBestMove != chess::Move(0)) {
+            auto it = std::find(moves.begin(), moves.end(), prevBestMove);
+            if (it != moves.end()) {
+                std::rotate(moves.begin(), it, it + 1);
+            }
+        }
+       
         for (const auto& move : moves) {
             board.makeMove(move);
             int score = minimax(board, currentDepth - 1, alpha, beta, !isWhite);
@@ -184,11 +241,11 @@ std::string getBestMoveTime(chess::Board board, int timeLimitMs) {
 
             if (timeIsUp) break;
             if (isWhite) {
-                if (score > bestScore) { bestScore = score; currentDepthBestMove = chess::uci::moveToUci(move); }
+                if (score > bestScore) { bestScore = score; currentDepthBestMove = chess::uci::moveToUci(move); currentBestMoveObj = move; }
                 if (score > alpha) alpha = score; 
             } 
             else {
-                if (score < bestScore) { bestScore = score; currentDepthBestMove = chess::uci::moveToUci(move); }
+                if (score < bestScore) { bestScore = score; currentDepthBestMove = chess::uci::moveToUci(move); currentBestMoveObj = move; }
                 if (score < beta) beta = score; 
             }
         }
@@ -197,6 +254,7 @@ std::string getBestMoveTime(chess::Board board, int timeLimitMs) {
             break; 
         }
         overallBestMove = currentDepthBestMove;
+        prevBestMove = currentBestMoveObj;
         std::cout << "Depth " << currentDepth << " completed. Nodes: " << nodes << " | Best Move so far: " << overallBestMove << std::endl;
     }
     return overallBestMove;
