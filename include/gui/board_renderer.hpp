@@ -3,6 +3,7 @@
 #include <string>
 #include <SFML/Graphics/Font.hpp>
 #include <SFML/Graphics/Text.hpp>
+#include "chess.hpp"
 namespace gui {
     class BoardRenderer {
         float m_squareSize;
@@ -16,7 +17,10 @@ namespace gui {
     public:
         BoardRenderer();
         // FEN string, renderer knows pieces go
-        void render(sf::RenderWindow& window, const std::string& fen);
+        // highlightKing=true draws a red border around the mated king's square
+        void render(sf::RenderWindow& window, const std::string& fen,
+                    bool highlightKing = false,
+                    chess::Color kingColor = chess::Color::WHITE);
         // translates screen pixels into chess squares using the renderer's internal scale
         std::string getSquareFromPixel(int x, int y) const;
     };

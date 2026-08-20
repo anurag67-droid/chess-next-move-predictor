@@ -19,4 +19,13 @@ bool Board::tryMove(const std::string& uciMove) {
         }
     }
     return false;
-}}
+}
+bool Board::isInCheck() const { return m_board.inCheck(); }
+bool Board::isCheckmate() const {
+    if (!m_board.inCheck()) return false;
+    chess::Movelist moves;
+    chess::movegen::legalmoves(moves, m_board);
+    return moves.empty();
+}
+chess::Color Board::sideToMove() const { return m_board.sideToMove(); }
+}

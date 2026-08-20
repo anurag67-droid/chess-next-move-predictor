@@ -11,5 +11,9 @@ namespace core {
         // true if the legal move, false if illegal
         bool tryMove(const std::string& uciMove);
         const chess::Board& getInternalBoard() const { return m_board; }
+        // game-state queries used by the GUI
+        bool isInCheck() const;
+        bool isCheckmate() const;
+        chess::Color sideToMove() const;
     };
 }
