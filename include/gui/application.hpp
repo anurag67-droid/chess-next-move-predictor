@@ -11,6 +11,7 @@ namespace gui {
         void update(sf::Time dt);
         void render();
         void setupImGuiStyle();         // one-time style setup
+        void rebakeFonts(float px);
         sf::RenderWindow m_window;
         sf::Clock m_deltaClock;
         sf::Clock m_moveClock;

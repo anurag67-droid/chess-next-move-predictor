@@ -100,23 +100,27 @@ Application::Application()
     if (!ImGui::SFML::Init(m_window))
         throw std::runtime_error("Failed to initialize ImGui-SFML bridge");
 
-    ImGuiIO& io = ImGui::GetIO();
-    io.FontGlobalScale = 1.0f;   // size is baked, no global scaling needed
-
-    const float BASE_PX = 16.f;
-    g_fontBody = io.Fonts->AddFontFromFileTTF("../assets/Inter-Regular.ttf", BASE_PX);
-    g_fontBold = io.Fonts->AddFontFromFileTTF("../assets/Inter-Bold.ttf",    BASE_PX);
-
-    // Fall back to default if files are missing (e.g. first run without assets)
-    if (!g_fontBody) { g_fontBody = io.Fonts->AddFontDefault(); }
-    if (!g_fontBold) { g_fontBold = io.Fonts->AddFontDefault(); }
-
-    // Rebuild the font texture with the new atlas (result intentionally ignored on failure)
-    [[maybe_unused]] bool fontTexOk = ImGui::SFML::UpdateFontTexture();
-
+    rebakeFonts(18.f);
     setupImGuiStyle();
     m_moveClock.restart();
     updateEvaluation();
+}
+void Application::rebakeFonts(float px) {
+    ImGuiIO& io = ImGui::GetIO();
+    io.Fonts->Clear();
+    io.FontGlobalScale = 1.0f;
+    ImFontConfig cfg;
+    cfg.OversampleH  = 3;
+    cfg.OversampleV  = 1;
+    cfg.PixelSnapH   = false;
+
+    g_fontBody = io.Fonts->AddFontFromFileTTF("../assets/Inter-Regular.ttf", px, &cfg);
+    g_fontBold = io.Fonts->AddFontFromFileTTF("../assets/Inter-Bold.ttf",    px, &cfg);
+
+    if (!g_fontBody) g_fontBody = io.Fonts->AddFontDefault();
+    if (!g_fontBold) g_fontBold = io.Fonts->AddFontDefault();
+
+    [[maybe_unused]] bool ok = ImGui::SFML::UpdateFontTexture();
 }
 
 
@@ -145,8 +149,9 @@ void Application::processEvents() {
             m_window.setView(sf::View(sf::FloatRect(
                 {0.f, 0.f},
                 {static_cast<float>(r->size.x), static_cast<float>(r->size.y)})));
-            // Scale the baked 16 px font proportionally
-            ImGui::GetIO().FontGlobalScale = static_cast<float>(r->size.y) / 768.f;
+            // Rebake fonts at the native pixel size for this window height.
+            float sf_ = static_cast<float>(r->size.y) / 768.f;
+            rebakeFonts(18.f * sf_);
             setupImGuiStyle();
         }
 
