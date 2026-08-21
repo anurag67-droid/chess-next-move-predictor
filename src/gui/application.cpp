@@ -9,8 +9,6 @@
 
 namespace gui {
 
-// ─── helpers ────────────────────────────────────────────────────────────────
-
 static std::string formatTime(float seconds) {
     if (seconds < 0.f) seconds = 0.f;
     int total = static_cast<int>(seconds);
@@ -26,7 +24,6 @@ static ImVec4 clockColor(float t) {
     return               {0.90f, 0.15f, 0.15f, 1.f};   // danger red
 }
 
-// ─── style setup ────────────────────────────────────────────────────────────
 
 void Application::setupImGuiStyle() {
     ImGuiStyle& s = ImGui::GetStyle();
@@ -84,9 +81,6 @@ void Application::setupImGuiStyle() {
     c[ImGuiCol_SliderGrabActive]     = {0.600f, 0.890f, 0.420f, 1.f};
 }
 
-// ─── lifecycle ──────────────────────────────────────────────────────────────
-
-// ── Two Inter fonts baked into ImGui's atlas ────────────────────────────────
 // Stored as file-level statics so update() can push/pop them at will.
 static ImFont* g_fontBody   = nullptr;  // Inter Regular  16 px
 static ImFont* g_fontBold   = nullptr;  // Inter Bold     16 px
@@ -98,6 +92,7 @@ Application::Application()
       m_currentEval(0.0f),
       m_whiteTimeLeft(600.f),
       m_blackTimeLeft(600.f),
+      m_isTimeless(false),
       m_gameOver(false),
       m_matedColor(chess::Color::WHITE)
 {
@@ -105,12 +100,9 @@ Application::Application()
     if (!ImGui::SFML::Init(m_window))
         throw std::runtime_error("Failed to initialize ImGui-SFML bridge");
 
-    // ── Load Inter into the ImGui font atlas ──────────────────────────────
     ImGuiIO& io = ImGui::GetIO();
     io.FontGlobalScale = 1.0f;   // size is baked, no global scaling needed
 
-    // Base pixel size: 16 px at 768 px window height feels just right.
-    // The atlas is rebuilt once; on resize we just adjust FontGlobalScale.
     const float BASE_PX = 16.f;
     g_fontBody = io.Fonts->AddFontFromFileTTF("../assets/Inter-Regular.ttf", BASE_PX);
     g_fontBold = io.Fonts->AddFontFromFileTTF("../assets/Inter-Bold.ttf",    BASE_PX);
@@ -142,8 +134,6 @@ void Application::run() {
 void Application::updateEvaluation() {
     m_currentEval = engine::getFutureEvaluation(m_board.getInternalBoard(), 4);
 }
-
-// ─── events ─────────────────────────────────────────────────────────────────
 
 void Application::processEvents() {
     while (const auto event = m_window.pollEvent()) {
@@ -188,20 +178,17 @@ void Application::processEvents() {
     }
 }
 
-// ─── update (imgui panel) ───────────────────────────────────────────────────
-
 void Application::update(sf::Time dt) {
     ImGui::SFML::Update(m_window, dt);
 
     // Tick the active side's clock
-    if (!m_gameOver) {
+    if (!m_gameOver && !m_isTimeless) {
         bool isWhiteTurn = (m_board.sideToMove() == chess::Color::WHITE);
         float& active = isWhiteTurn ? m_whiteTimeLeft : m_blackTimeLeft;
         active -= dt.asSeconds();
         if (active <= 0.f) { active = 0.f; m_gameOver = true; m_matedColor = m_board.sideToMove(); }
     }
 
-    // ── panel geometry ──
     float winH       = static_cast<float>(m_window.getSize().y);
     float winW       = static_cast<float>(m_window.getSize().x);
     float sf_        = winH / 768.f;           // scaleFactor
@@ -220,10 +207,6 @@ void Application::update(sf::Time dt) {
     // Use Inter Regular for the whole panel
     if (g_fontBody) ImGui::PushFont(g_fontBody);
     float cw = ImGui::GetContentRegionAvail().x;   // usable content width
-
-    // ┌─────────────────────────────────────────────────────────────┐
-    // │  HEADER                                                      │
-    // └─────────────────────────────────────────────────────────────┘
     ImGui::Spacing();
     // Gold title — use Bold for the main heading
     if (g_fontBold) { ImGui::PopFont(); ImGui::PushFont(g_fontBold); }
@@ -234,8 +217,6 @@ void Application::update(sf::Time dt) {
         "%.0f FPS  |  depth-4 eval", ImGui::GetIO().Framerate);
 
     ImGui::Spacing();
-
-    // Decorative divider line (drawn via DrawList for a gold tint)
     {
         ImDrawList* dl = ImGui::GetWindowDrawList();
         ImVec2 p = ImGui::GetCursorScreenPos();
@@ -243,10 +224,6 @@ void Application::update(sf::Time dt) {
         ImGui::Dummy({cw, 1.f});
     }
     ImGui::Spacing();
-
-    // ┌─────────────────────────────────────────────────────────────┐
-    // │  CLOCKS                                                      │
-    // └─────────────────────────────────────────────────────────────┘
     ImGui::TextColored({0.42f, 0.42f, 0.42f, 1.f}, "CLOCKS");
     ImGui::Spacing();
 
@@ -270,9 +247,9 @@ void Application::update(sf::Time dt) {
                        : ImVec4(0.40f, 0.40f, 0.40f, 1.f),
                 "%s", label);
 
-            // Time — right-aligned
-            std::string ts = formatTime(timeLeft);
-            if (active) ts += " <<";
+            // Time right aligned
+            std::string ts = m_isTimeless ? "--:--" : formatTime(timeLeft);
+            if (active && !m_isTimeless) ts += " <<";
             float tw = ImGui::CalcTextSize(ts.c_str()).x;
             ImGui::SameLine(ImGui::GetWindowWidth() - tw - 12.f * sf_);
             ImGui::TextColored(clockColor(timeLeft), "%s", ts.c_str());
@@ -286,12 +263,10 @@ void Application::update(sf::Time dt) {
     drawClock("##WhiteClock", "WHITE", m_whiteTimeLeft, !m_gameOver &&  whiteTurn);
 
     ImGui::Spacing();
+    ImGui::Checkbox("Timeless Mode", &m_isTimeless);
+    ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
-
-    // ┌─────────────────────────────────────────────────────────────┐
-    // │  EVALUATION BAR                                              │
-    // └─────────────────────────────────────────────────────────────┘
     ImGui::TextColored({0.42f, 0.42f, 0.42f, 1.f}, "EVALUATION");
     ImGui::Spacing();
 
@@ -303,7 +278,6 @@ void Application::update(sf::Time dt) {
         float  clampEv  = std::max(-10.f, std::min(10.f, m_currentEval));
         float  wRatio   = std::max(0.04f, std::min(0.96f, 0.5f + clampEv / 20.f));
         float  r        = 4.f;
-
         // Black background (full bar)
         dl->AddRectFilled(p, {p.x + cw, p.y + barH}, IM_COL32(28, 28, 28, 255), r);
         // White portion
@@ -318,7 +292,6 @@ void Application::update(sf::Time dt) {
         ImGui::Dummy({cw, barH});
     }
     ImGui::Spacing();
-
     // Evaluation text
     {
         char evBuf[32];
@@ -335,9 +308,6 @@ void Application::update(sf::Time dt) {
     ImGui::Separator();
     ImGui::Spacing();
 
-    // ┌─────────────────────────────────────────────────────────────┐
-    // │  STATUS BADGES (check / checkmate / time-out)               │
-    // └─────────────────────────────────────────────────────────────┘
 
     // Lambda for a coloured status box
     auto drawBadge = [&](const char* id, ImVec4 bg, ImVec4 border,
@@ -381,9 +351,6 @@ void Application::update(sf::Time dt) {
             {0.72f,0.72f,0.72f,1.f}, "- %s king is in danger!", side);
     }
 
-    // ┌─────────────────────────────────────────────────────────────┐
-    // │  ENGINE BUTTON                                               │
-    // └─────────────────────────────────────────────────────────────┘
     if (!m_gameOver) {
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 7.f);
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,  ImVec2(12.f, 9.f));
@@ -401,9 +368,6 @@ void Application::update(sf::Time dt) {
         ImGui::Spacing();
     }
 
-    // ┌─────────────────────────────────────────────────────────────┐
-    // │  MOVE HISTORY                                                │
-    // └─────────────────────────────────────────────────────────────┘
     ImGui::TextColored({0.42f, 0.42f, 0.42f, 1.f}, "MOVE HISTORY");
     ImGui::Spacing();
 
@@ -443,11 +407,8 @@ void Application::update(sf::Time dt) {
     ImGui::End();
 }
 
-// ─── render ─────────────────────────────────────────────────────────────────
-
 void Application::render() {
-    m_window.clear(sf::Color(20, 20, 20));   // near-black canvas
-
+    m_window.clear(sf::Color(20, 20, 20));
     bool showHighlight = m_board.isInCheck();
     chess::Color checkedSide = m_board.sideToMove();
     m_boardRenderer.render(m_window, m_board.getFen(), showHighlight, checkedSide);

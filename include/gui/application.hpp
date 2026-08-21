@@ -26,6 +26,7 @@ namespace gui {
         float m_whiteTimeLeft;
         float m_blackTimeLeft;
         // Game-over state
+        bool m_isTimeless;
         bool m_gameOver;
         chess::Color m_matedColor;
     public:
