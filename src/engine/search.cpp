@@ -72,31 +72,32 @@ int scoreMove(const chess::Board& board, const chess::Move& move) {
 
 int quiescence(chess::Board& board, int alpha, int beta, bool isMaximizing) {
     nodes.fetch_add(1, std::memory_order_relaxed);
-    if (board.isRepetition() || board.isHalfMoveDraw() || board.isInsufficientMaterial()) {
-        return 0;
-    }
-
+    if (board.isRepetition() || board.isHalfMoveDraw() || board.isInsufficientMaterial()) return 0;
+    bool inCheck = board.inCheck();
     int standPat = evaluate(board);
-    if (isMaximizing) {
-        if (standPat >= beta) return beta;
-        if (alpha < standPat) alpha = standPat;
-    } else {
-        if (standPat <= alpha) return alpha;
-        if (beta > standPat) beta = standPat;
+    if (!inCheck) {
+        if (isMaximizing) {
+            if (standPat >= beta) return beta;
+            if (alpha < standPat) alpha = standPat;
+        } else {
+            if (standPat <= alpha) return alpha;
+            if (beta > standPat) beta = standPat;
+        }
     }
     chess::Movelist moves;
     chess::movegen::legalmoves(moves, board);
     if (moves.empty()) {
-        if (board.inCheck()) return isMaximizing ? -20000 : 20000;
+        if (inCheck) return isMaximizing ? -20000 : 20000;
         return 0; 
     }
     std::sort(moves.begin(), moves.end(), [&board](const chess::Move& a, const chess::Move& b){
         return scoreMove(board, a) > scoreMove(board, b);
     });
     if (isMaximizing) {
-        int maxScore = standPat;
+        int maxScore = inCheck ? -99999 : standPat;
         for (const auto& move : moves) {
-            if (!board.isCapture(move)) continue;
+            if (!inCheck && !board.isCapture(move)) continue;
+            
             board.makeMove(move);
             int score = quiescence(board, alpha, beta, false);
             board.unmakeMove(move);
@@ -107,11 +108,10 @@ int quiescence(chess::Board& board, int alpha, int beta, bool isMaximizing) {
             if (beta <= alpha) break;
         }
         return maxScore;
-    } 
-    else {
-        int minScore = standPat;
+    } else {
+        int minScore = inCheck ? 99999 : standPat;
         for (const auto& move : moves) {
-            if (!board.isCapture(move)) continue;
+            if (!inCheck && !board.isCapture(move)) continue;
             
             board.makeMove(move);
             int score = quiescence(board, alpha, beta, true);
@@ -153,6 +153,7 @@ int minimax(chess::Board& board, int depth, int alpha, int beta, bool isMaximizi
     if (depth <= 0) return quiescence(board, alpha, beta, isMaximizing);
 
     bool inCheck = board.inCheck();
+    int extension = inCheck ? 1 : 0;
     
     if (depth >= 3 && !inCheck) {
         board.makeNullMove();
@@ -194,7 +195,7 @@ int minimax(chess::Board& board, int depth, int alpha, int beta, bool isMaximizi
     if (isMaximizing) { 
         for (const auto& move : moves) {
             board.makeMove(move);
-            int score = minimax(board, depth - 1, alpha, beta, false);
+            int score = minimax(board, depth - 1 + extension, alpha, beta, false);
             board.unmakeMove(move); 
             if (timeIsUp.load(std::memory_order_relaxed)) return 0;
             if (score > bestScore) {
@@ -208,7 +209,7 @@ int minimax(chess::Board& board, int depth, int alpha, int beta, bool isMaximizi
     else { 
         for (const auto& move : moves) {
             board.makeMove(move);
-            int score = minimax(board, depth - 1, alpha, beta, true);
+            int score = minimax(board, depth - 1 + extension, alpha, beta, true);
             board.unmakeMove(move);
             if (timeIsUp.load(std::memory_order_relaxed)) return 0;
             if (score < bestScore) {
