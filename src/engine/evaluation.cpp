@@ -272,10 +272,32 @@ int evaluate(const chess::Board& board) {
                 eg += eg_queen_table[tableSq];
                 gamePhase += 4;
                 break;
-            case static_cast<int>(chess::PieceType::KING):
+            case static_cast<int>(chess::PieceType::KING): {
                 mg += mg_king_table[tableSq];
-                eg += eg_king_table[tableSq];
+                eg += mg_king_table[tableSq];
+                // King Safety Penalty (Middlegame only)
+                // Punish missing pawn shields and open files near the king
+                int missingShieldPawns = 0;
+                int fullyOpenFiles = 0;
+                for (int f = std::max(0,file-1); f <= std::min(7,file+1);f++) {
+                    if (color == 0){ // White
+                        if (whitePawnsOnFile[f] == 0) {
+                            missingShieldPawns++;
+                            if (blackPawnsOnFile[f] == 0) fullyOpenFiles++;
+                        }
+                    }
+                    else{ // Black
+                        if (blackPawnsOnFile[f] == 0) {
+                            missingShieldPawns++;
+                            if (whitePawnsOnFile[f] == 0) fullyOpenFiles++;
+                        }
+                    }
+                }
+                mg -= (missingShieldPawns * 30);
+                mg -= (fullyOpenFiles * 40);
+                
                 break;
+            }
         }
 
         mgScore[color] += mg;
