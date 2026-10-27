@@ -2,251 +2,90 @@
 
 # Chess Next Move Predictor
 
-**Modern C++ Chess Engine with an Interactive SFML GUI**
-
-Featuring Alpha-Beta Pruning, Iterative Deepening, Quiescence Search, and Transposition Tables for real-time move prediction.
+A desktop chess board with a built-in C++ engine that analyses every position and predicts the best next move.
 
 [![C++17](https://img.shields.io/badge/C++-17-00599C?logo=c%2B%2B)](https://en.cppreference.com/w/cpp/17)
-[![SFML](https://img.shields.io/badge/Graphics-SFML%203-8CC445)](https://github.com/sfml/sfml)
-[![ImGui](https://img.shields.io/badge/UI-%20ImGui-9146FF)](https://github.com/ocornut/imgui)
-[![Chess](https://img.shields.io/badge/Backend-chess.hpp-black)](https://github.com/Disservin/chess-library)
+[![SFML](https://img.shields.io/badge/Graphics-SFML%203-8CC445)](https://github.com/SFML/SFML)
+[![ImGui](https://img.shields.io/badge/UI-Dear%20ImGui-9146FF)](https://github.com/ocornut/imgui)
+[![chess.hpp](https://img.shields.io/badge/Move%20generation-chess.hpp-black)](https://github.com/Disservin/chess-library)
+
+<img src="docs/screenshot-game.png" width="860" alt="A game in progress with the engine's suggested move drawn as an arrow">
 
 </div>
 
----
-
-## Overview
-
-Chess Next Move Predictor is a **desktop chess engine and visualization tool** built in **Modern C++17**. The project combines an interactive SFML chessboard with a handcrafted search engine that evaluates positions and predicts the strongest legal move within a configurable time limit.
-
-The engine implements several classical techniques used in traditional chess engines, including **Iterative Deepening**, **Alpha-Beta Pruning**, **Quiescence Search**, **Move Ordering**, and **Transposition Tables**. Together, these algorithms allow the engine to search significantly deeper than a naïve minimax implementation while remaining responsive during gameplay.
-
-To keep the project modular, the application is divided into three independent layers:
-
-- **GUI** – Handles rendering, drag-and-drop interaction, and displays engine information.
-- **Core** – Maintains the board state and validates legal moves using `chess.hpp`.
-- **Engine** – Evaluates positions and searches for the strongest continuation.
-
-The result is a modular chess engine that demonstrates the core algorithms behind classical computer chess while providing an interactive environment for experimentation and analysis.
-
----
-## Application Preview
-<p align="center">
-  <img src="image-1.png" width="900">
-</p>
-
-<p align="center">
-  <img src="image-2.png" width="900">
-</p>
-
----
 ## Features
 
-- **Interactive Chessboard** — Drag-and-drop interface built with **SFML 3** for intuitive gameplay.
-- **Classical Chess Engine** — Predicts the strongest legal move using **Minimax** enhanced with **Alpha-Beta Pruning**.
-- **Iterative Deepening Search** — Continuously searches deeper until the configured time limit expires, always returning the best move from the deepest completed iteration.
-- **Quiescence Search** — Extends tactical positions beyond the normal search depth to reduce the horizon effect.
-- **Transposition Table** — Uses **Zobrist hashing** to cache previously evaluated positions and eliminate redundant calculations.
-- **Move Ordering** — Prioritizes promotions and high-value captures using an **MVV-LVA** heuristic to improve alpha-beta efficiency.
-- **Live Position Evaluation** — Displays the engine's evaluation of the current position directly within the GUI.
-- **Move History** — Records every move played during the game for easy review.
-- **Modular Architecture** — Clean separation between the **GUI**, **Board Management**, and **Search Engine** for maintainability and extensibility.
-- **Live Search Diagnostics** — Displays completed search depth, explored nodes, the current best move, and time-limit events during engine analysis.
+**Board**
+- Drag-and-drop or click-to-move, with legal-move dots, last-move and check highlights
+- Promotion picker, castling, en passant and all draw rules (stalemate, repetition, 50 moves, insufficient material)
+- Flip the board, undo moves and pick a board theme (Green, Wood, Blue, Slate)
+- Optional chess clocks (1 to 30 minutes)
+- Paste a FEN to analyse any position, or copy the current one
 
----
-
-## Architecture
-
-The project follows a layered architecture where the graphical interface, board representation, and search engine operate independently. The GUI is responsible only for rendering and user interaction, while all chess logic is delegated to the core board wrapper and search engine.
-
-```text
-                         User Input
-                   (Drag & Drop Pieces)
-                             │
-                             ▼
-                  +----------------------+
-                  |      SFML GUI        |
-                  |  Board + ImGui Panel |
-                  +----------+-----------+
-                             │
-                             ▼
-                  +----------------------+
-                  |     core::Board      |
-                  |  Board State Wrapper |
-                  +----------+-----------+
-                             │
-                             ▼
-                  +----------------------+
-                  |     chess.hpp        |
-                  | Legal Move Generator |
-                  +----------+-----------+
-                             │
-                             ▼
-                  +----------------------+
-                  |    Search Engine     |
-                  |  Alpha-Beta Minimax  |
-                  +----------+-----------+
-                             │
-          +------------------+------------------+
-          │                                     │
-          ▼                                     ▼
-  Move Ordering                    Transposition Table
-      (MVV-LVA)                     (Zobrist Hashing)
-          │                                     │
-          +------------------+------------------+
-                             │
-                             ▼
-                    Quiescence Search
-                             │
-                             ▼
-                   Position Evaluation
-        (Material and simple positional evaluation.)
-                             │
-                             ▼
-              Best Move & Live Evaluation
-```
-
-### Design Philosophy
-
-The application is intentionally divided into three independent modules:
-
-| Module | Responsibility |
-|--------|----------------|
-| **GUI** | Renders the chessboard, processes mouse events, displays engine telemetry, and visualizes the current position. |
-| **Core** | Maintains the board state and validates legal moves through `chess.hpp`. |
-| **Engine** | Evaluates positions and searches the game tree to predict the strongest continuation. |
-
-This separation keeps the rendering layer completely independent of the chess engine. The GUI never performs move generation or evaluation, while the engine has no knowledge of rendering or user interaction, making each subsystem easier to maintain and extend.
-
----
-
-## Core Components
-
-| Component | Technology | Purpose |
-|-----------|------------|---------|
-| **Board** | `chess.hpp` | Maintains the game state, generates legal moves, validates move legality, and exports board positions as FEN strings. |
-| **Search Engine** | Modern C++ | Implements Iterative Deepening, Alpha-Beta Pruning, Quiescence Search, Move Ordering, and Transposition Tables to predict the strongest move. |
-| **Evaluation** | Custom Heuristics | Scores positions using material balance, positional bonuses, and basic king safety heuristics. |
-| **Board Renderer** | SFML 3 | Renders the chessboard, pieces, coordinates, and translates mouse input into chess moves. |
-| **Telemetry Panel** | Dear ImGui | Displays engine evaluation, move history, performance statistics, and prediction controls in real time. |
-
----
-
-## Project Structure
-
-```text
-chess-next-move-predictor/
-├── assets/
-│   ├── pieces.png
-│   └── font.ttf
-├── include/
-│   ├── core/
-│   │   └── board.hpp
-│   ├── engine/
-│   │   ├── evaluation.hpp
-│   │   └── search.hpp
-│   └── gui/
-│       ├── application.hpp
-│       └── board_renderer.hpp
-├── src/
-│   ├── core/
-│   │   └── board.cpp
-│   ├── engine/
-│   │   ├── evaluation.cpp
-│   │   └── search.cpp
-│   ├── gui/
-│   │   ├── application.cpp
-│   │   └── board_renderer.cpp
-│   └── main.cpp
-├── CMakeLists.txt
-└── README.md
-```
-
----
-
-## Getting Started
-
-### Prerequisites
-
-Before building the project, ensure the following dependencies are installed:
-
-- **C++17** compatible compiler (`g++` or `clang++`)
-- **CMake 3.15** or newer
-- **SFML 3**
-- **OpenGL**
-- **Dear ImGui**
-- **imgui-sfml**
-- **chess.hpp**
-
----
-
-
-### Build
-
-```bash
-# Clone the repository
-git clone https://github.com/anurag67-droid/chess-next-move-predictor.git
-
-cd chess-next-move-predictor
-
-# Configure the project and compile
-mkdir build
-cd build
-cmake ..
-make
-```
----
-
-### Run
-
-```bash
-./ChessNextMovePredictor
-```
-After launching the application:
-
-- Drag and drop pieces to play legal moves.
-- Watch the live engine evaluation update after every move.
-- Click **Predict Best Next Move** to let the engine search for the strongest continuation.
-- Review the complete move history from the telemetry panel.
-
----
-## Engine Diagnostics
-
-During each search, the engine outputs real-time diagnostics to the console, providing insight into the search process and making it easier to analyze performance and debug the engine.
-
-The diagnostic output includes:
-
-- Search depth completed
-- Number of nodes explored
-- Current best move after each iteration
-- Time-limit notifications
-
-Example:
+**Engine**
+- Analyses every new position in the background, so the window never freezes
+- Live evaluation bar, score, search depth and a best-move arrow
+- **Play best move** lets the engine move for the side to play (1 to 15 s think time, or stop early with *move now*)
+- Optional auto-reply, so you can play a full game against the engine
 
 <p align="center">
-  <img src="image.png" width="900">
+  <img src="docs/screenshot-analysis.png" width="860" alt="Flipped board with the Wood theme; the engine has found a winning capture">
 </p>
 
-These logs demonstrate how Iterative Deepening progressively refines the engine's prediction while respecting the configured search time limit.
+## Building
 
----
+You need a C++17 compiler and CMake 3.16+. SFML 3, Dear ImGui, ImGui-SFML and chess.hpp are git submodules.
 
-## Current Limitations
+```bash
+git clone --recursive https://github.com/anurag67-droid/chess-next-move-predictor.git
+cd chess-next-move-predictor
+cmake -S . -B build
+cmake --build build -j
+./build/ChessNextMovePredictor
+```
 
-- High execution time hence less depth
-- No opening or endgame data
-- Sometimes evaluation overly relies on material advantage, even ignoring positional advantage or brilliancy (atk/def both)
-- Less king safety precautions (only castle, mid/endgame behaviour and pawn shielding.)
-- Single-threaded search
-- En passant
----
+If you already cloned without `--recursive`, run `git submodule update --init` first.
 
-## Possible Future Improvements
+If SFML 3 is installed on your system, CMake uses it. Otherwise it builds the bundled copy, which on Linux needs a few development packages:
 
-- Optimization
-- Standard Opening & Endgame data
-- Killer Move & History heuristics & defensive measures
-- More King safety
-- Multi-threaded search
-- En passant
----
+```bash
+sudo apt install libx11-dev libxrandr-dev libxcursor-dev libxi-dev libudev-dev \
+                 libgl1-mesa-dev libfreetype-dev libharfbuzz-dev
+```
+
+## How the engine works
+
+The engine (`src/engine/`) is a classical alpha-beta searcher:
+
+| Technique | What it does |
+|-----------|--------------|
+| Iterative deepening | Searches depth 1, 2, 3, ... until time runs out, keeping the best move from the deepest finished search. |
+| Negamax with alpha-beta pruning | Skips branches that cannot change the result. |
+| Transposition table | A lock-free hash table (Zobrist keys) that remembers positions already searched. |
+| Move ordering | Tries the remembered best move first, then captures by MVV-LVA (most valuable victim, least valuable attacker). |
+| Null-move pruning and check extensions | Cuts hopeless lines early and looks deeper when a king is in check. |
+| Quiescence search | Plays out captures at the end of the search, so it never stops in the middle of an exchange. |
+| Lazy SMP | Searches on every CPU core, with all threads sharing the transposition table. |
+| PeSTO evaluation | Tapered middlegame/endgame piece-square tables, plus pawn structure, bishop pair, rook files and king shelter. |
+
+## Project layout
+
+```text
+include/, src/
+├── core/     game.*            game state, move history (SAN), FEN loading, game-over rules
+├── engine/   search.*          iterative deepening alpha-beta search
+│             evaluation.*      PeSTO static evaluation
+└── gui/      application.*     window, input handling and game flow
+              panel.cpp         side panel, player bars, promotion picker
+              board_renderer.*  board, pieces, arrows and evaluation bar (SFML)
+              engine_worker.*   runs the engine on a background thread
+              widgets.*, format.*, theme.hpp   UI helpers, text formatting, colours
+assets/       piece sprites and the Inter font
+third_party/  SFML, Dear ImGui, ImGui-SFML, chess.hpp (submodules)
+```
+
+## Limitations
+
+- No opening book or endgame tablebases.
+- The evaluation is hand-written and simple, so the engine is far weaker than engines like Stockfish.
+- Move ordering has no killer-move or history heuristics yet, so it searches fewer plies than stronger engines.

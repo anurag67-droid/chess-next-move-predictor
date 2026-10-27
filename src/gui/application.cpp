@@ -1,423 +1,423 @@
 #include "gui/application.hpp"
-#include "engine/search.hpp"
-#include <imgui.h>
+
+#include "gui/assets.hpp"
+#include "gui/format.hpp"
+#include "gui/widgets.hpp"
+
 #include <imgui-SFML.h>
-#include <stdexcept>
-#include <iostream>
+
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
+#include <stdexcept>
 
 namespace gui {
+namespace {
 
-static std::string formatTime(float seconds) {
-    if (seconds < 0.f) seconds = 0.f;
-    int total = static_cast<int>(seconds);
-    char buf[16];
-    std::snprintf(buf, sizeof(buf), "%02d:%02d", total / 60, total % 60);
-    return buf;
-}
+constexpr int kAnalysisMs = 3000; // background analysis after every move
 
-// Pick a colour for the clock digit based on remaining seconds
-static ImVec4 clockColor(float t) {
-    if (t > 60.f) return {0.90f, 0.90f, 0.90f, 1.f};   // near-white
-    if (t > 20.f) return {1.00f, 0.72f, 0.00f, 1.f};   // amber
-    return               {0.90f, 0.15f, 0.15f, 1.f};   // danger red
-}
-
-
-void Application::setupImGuiStyle() {
-    ImGuiStyle& s = ImGui::GetStyle();
-
-    // Shape
-    s.WindowRounding    = 0.f;
-    s.ChildRounding     = 6.f;
-    s.FrameRounding     = 5.f;
-    s.GrabRounding      = 4.f;
-    s.ScrollbarRounding = 5.f;
-    s.PopupRounding     = 6.f;
-
-    // Spacing / padding
-    s.WindowPadding     = ImVec2(14.f, 12.f);
-    s.FramePadding      = ImVec2(10.f,  6.f);
-    s.ItemSpacing       = ImVec2( 8.f,  8.f);
-    s.ItemInnerSpacing  = ImVec2( 6.f,  5.f);
-    s.IndentSpacing     = 18.f;
-    s.ScrollbarSize     = 8.f;
-
-    // Borders
-    s.WindowBorderSize  = 0.f;
-    s.FrameBorderSize   = 0.f;
-    s.ChildBorderSize   = 1.f;
-
-    ImVec4* c = s.Colors;
-    c[ImGuiCol_WindowBg]             = {0.098f, 0.098f, 0.098f, 1.f};  // #191919
-    c[ImGuiCol_ChildBg]              = {0.118f, 0.118f, 0.118f, 1.f};  // #1e1e1e
-    c[ImGuiCol_PopupBg]              = {0.118f, 0.118f, 0.118f, 1.f};
-    c[ImGuiCol_Border]               = {0.220f, 0.220f, 0.220f, 1.f};
-    c[ImGuiCol_Text]                 = {0.920f, 0.920f, 0.920f, 1.f};
-    c[ImGuiCol_TextDisabled]         = {0.420f, 0.420f, 0.420f, 1.f};
-    c[ImGuiCol_TitleBg]              = {0.060f, 0.060f, 0.060f, 1.f};
-    c[ImGuiCol_TitleBgActive]        = {0.060f, 0.060f, 0.060f, 1.f};
-    c[ImGuiCol_TitleBgCollapsed]     = {0.060f, 0.060f, 0.060f, 1.f};
-    c[ImGuiCol_ScrollbarBg]          = {0.098f, 0.098f, 0.098f, 1.f};
-    c[ImGuiCol_ScrollbarGrab]        = {0.280f, 0.280f, 0.280f, 1.f};
-    c[ImGuiCol_ScrollbarGrabHovered] = {0.380f, 0.380f, 0.380f, 1.f};
-    c[ImGuiCol_ScrollbarGrabActive]  = {0.480f, 0.480f, 0.480f, 1.f};
-    c[ImGuiCol_FrameBg]              = {0.160f, 0.160f, 0.160f, 1.f};
-    c[ImGuiCol_FrameBgHovered]       = {0.200f, 0.200f, 0.200f, 1.f};
-    c[ImGuiCol_FrameBgActive]        = {0.240f, 0.240f, 0.240f, 1.f};
-    c[ImGuiCol_Header]               = {0.200f, 0.200f, 0.200f, 1.f};
-    c[ImGuiCol_HeaderHovered]        = {0.280f, 0.280f, 0.280f, 1.f};
-    c[ImGuiCol_HeaderActive]         = {0.340f, 0.340f, 0.340f, 1.f};
-    c[ImGuiCol_Separator]            = {0.200f, 0.200f, 0.200f, 1.f};
-    c[ImGuiCol_SeparatorHovered]     = {0.320f, 0.320f, 0.320f, 1.f};
-    c[ImGuiCol_SeparatorActive]      = {0.420f, 0.420f, 0.420f, 1.f};
-    // chess.com green buttons
-    c[ImGuiCol_Button]               = {0.310f, 0.540f, 0.180f, 1.f};
-    c[ImGuiCol_ButtonHovered]        = {0.380f, 0.640f, 0.230f, 1.f};
-    c[ImGuiCol_ButtonActive]         = {0.230f, 0.430f, 0.120f, 1.f};
-    c[ImGuiCol_CheckMark]            = {0.490f, 0.790f, 0.320f, 1.f};
-    c[ImGuiCol_SliderGrab]           = {0.490f, 0.790f, 0.320f, 1.f};
-    c[ImGuiCol_SliderGrabActive]     = {0.600f, 0.890f, 0.420f, 1.f};
-}
-
-// Stored as file-level statics so update() can push/pop them at will.
-static ImFont* g_fontBody   = nullptr;  // Inter Regular  16 px
-static ImFont* g_fontBold   = nullptr;  // Inter Bold     16 px
+} // namespace
 
 Application::Application()
-    : m_window(sf::VideoMode({1024, 768}), "C++ Chess Engine", sf::Style::Default),
-      m_isDragging(false),
-      m_selectedSquare(""),
-      m_currentEval(0.0f),
-      m_whiteTimeLeft(600.f),
-      m_blackTimeLeft(600.f),
-      m_isTimeless(false),
-      m_gameOver(false),
-      m_matedColor(chess::Color::WHITE)
 {
+    sf::ContextSettings settings;
+    settings.antiAliasingLevel = 4;
+    m_window.create(sf::VideoMode({1280u, 800u}), "Chess Next Move Predictor", sf::Style::Default,
+                    sf::State::Windowed, settings);
     m_window.setFramerateLimit(60);
-    if (!ImGui::SFML::Init(m_window))
-        throw std::runtime_error("Failed to initialize ImGui-SFML bridge");
+    m_window.setMinimumSize(sf::Vector2u{960u, 640u});
 
-    rebakeFonts(18.f);
-    setupImGuiStyle();
-    m_moveClock.restart();
-    updateEvaluation();
-}
-void Application::rebakeFonts(float px) {
-    ImGuiIO& io = ImGui::GetIO();
-    io.Fonts->Clear();
-    io.FontGlobalScale = 1.0f;
-    ImFontConfig cfg;
-    cfg.OversampleH  = 3;
-    cfg.OversampleV  = 1;
-    cfg.PixelSnapH   = false;
+    if (!ImGui::SFML::Init(m_window, false))
+        throw std::runtime_error("Failed to initialise ImGui-SFML");
+    ImGui::GetIO().IniFilename = nullptr; // don't litter the working directory with imgui.ini
 
-    g_fontBody = io.Fonts->AddFontFromFileTTF("../assets/Inter-Regular.ttf", px, &cfg);
-    g_fontBold = io.Fonts->AddFontFromFileTTF("../assets/Inter-Bold.ttf",    px, &cfg);
-
-    if (!g_fontBody) g_fontBody = io.Fonts->AddFontDefault();
-    if (!g_fontBold) g_fontBold = io.Fonts->AddFontDefault();
-
-    [[maybe_unused]] bool ok = ImGui::SFML::UpdateFontTexture();
+    resetClocks();
+    updateLayout();
+    startAnalysis();
 }
 
+Application::~Application()
+{
+    m_engine.cancel();
+    ImGui::SFML::Shutdown();
+}
 
-Application::~Application() { ImGui::SFML::Shutdown(); }
-
-void Application::run() {
+void Application::run()
+{
     while (m_window.isOpen()) {
-        processEvents();
-        sf::Time dt = m_deltaClock.restart();
-        update(dt);
+        while (const auto event = m_window.pollEvent()) {
+            ImGui::SFML::ProcessEvent(m_window, *event);
+            handleEvent(*event);
+        }
+        update(m_frameClock.restart().asSeconds());
         render();
     }
 }
 
-void Application::updateEvaluation() {
-    m_currentEval = engine::getFutureEvaluation(m_board.getInternalBoard(), 4);
-}
+// ---------------------------------------------------------------------------
+// Input
 
-void Application::processEvents() {
-    while (const auto event = m_window.pollEvent()) {
-        ImGui::SFML::ProcessEvent(m_window, *event);
-
-        if (event->is<sf::Event::Closed>()) m_window.close();
-
-        if (const auto* r = event->getIf<sf::Event::Resized>()) {
-            m_window.setView(sf::View(sf::FloatRect(
-                {0.f, 0.f},
-                {static_cast<float>(r->size.x), static_cast<float>(r->size.y)})));
-            // Rebake fonts at the native pixel size for this window height.
-            float sf_ = static_cast<float>(r->size.y) / 768.f;
-            rebakeFonts(18.f * sf_);
-            setupImGuiStyle();
-        }
-
-        if (const auto* mc = event->getIf<sf::Event::MouseButtonPressed>()) {
-            if (mc->button == sf::Mouse::Button::Left) {
-                std::string sq = m_boardRenderer.getSquareFromPixel(mc->position.x, mc->position.y);
-                if (!sq.empty()) { m_isDragging = true; m_selectedSquare = sq; }
-            }
-        }
-
-        if (const auto* mm = event->getIf<sf::Event::MouseMoved>())
-            m_mouseCoords = mm->position;
-
-        if (const auto* mr = event->getIf<sf::Event::MouseButtonReleased>()) {
-            if (mr->button == sf::Mouse::Button::Left && m_isDragging) {
-                m_isDragging = false;
-                std::string target = m_boardRenderer.getSquareFromPixel(mr->position.x, mr->position.y);
-                if (!target.empty() && target != m_selectedSquare && !m_gameOver) {
-                    if (m_board.tryMove(m_selectedSquare + target)) {
-                        m_moveHistory.push_back(m_selectedSquare + target);
-                        m_moveClock.restart();
-                        updateEvaluation();
-                        if (m_board.isCheckmate()) { m_gameOver = true; m_matedColor = m_board.sideToMove(); }
-                    }
-                }
-                m_selectedSquare = "";
-            }
+void Application::handleEvent(const sf::Event& event)
+{
+    if (event.is<sf::Event::Closed>()) {
+        m_window.close();
+    } else if (const auto* resized = event.getIf<sf::Event::Resized>()) {
+        const sf::Vector2f size(resized->size);
+        m_window.setView(sf::View(sf::FloatRect({0.f, 0.f}, size)));
+        updateLayout();
+    } else if (const auto* moved = event.getIf<sf::Event::MouseMoved>()) {
+        m_mouse = sf::Vector2f(moved->position);
+    } else if (const auto* pressed = event.getIf<sf::Event::MouseButtonPressed>()) {
+        // Clicks on ImGui windows are handled by ImGui. (Hit-testing here instead of using
+        // io.WantCaptureMouse, which lags a frame behind fast mouse movements.)
+        const sf::Vector2f position(pressed->position);
+        const auto picker = promotionPickerRect();
+        const bool onInterface = m_layout.panel.contains(position) || (picker && picker->contains(position));
+        if (pressed->button == sf::Mouse::Button::Left && !onInterface) onMousePressed(position);
+    } else if (const auto* released = event.getIf<sf::Event::MouseButtonReleased>()) {
+        if (released->button == sf::Mouse::Button::Left) onMouseReleased(sf::Vector2f(released->position));
+    } else if (const auto* key = event.getIf<sf::Event::KeyPressed>()) {
+        if (key->code == sf::Keyboard::Key::Escape) {
+            m_selected.reset();
+            m_dragging = false;
+            m_pendingPromotion.reset();
         }
     }
 }
 
-void Application::update(sf::Time dt) {
-    ImGui::SFML::Update(m_window, dt);
+void Application::onMousePressed(sf::Vector2f position)
+{
+    if (m_pendingPromotion) { // clicking anywhere but the picker cancels the promotion
+        m_pendingPromotion.reset();
+        return;
+    }
+    if (!canMovePieces()) return;
 
-    // Tick the active side's clock
-    if (!m_gameOver && !m_isTimeless) {
-        bool isWhiteTurn = (m_board.sideToMove() == chess::Color::WHITE);
-        float& active = isWhiteTurn ? m_whiteTimeLeft : m_blackTimeLeft;
-        active -= dt.asSeconds();
-        if (active <= 0.f) { active = 0.f; m_gameOver = true; m_matedColor = m_board.sideToMove(); }
+    const auto square = m_renderer.squareAt(position);
+    if (!square) {
+        m_selected.reset();
+        return;
     }
 
-    float winH       = static_cast<float>(m_window.getSize().y);
-    float winW       = static_cast<float>(m_window.getSize().x);
-    float sf_        = winH / 768.f;           // scaleFactor
-    float uiWidth    = 390.f * sf_;
-    bool  whiteTurn  = (m_board.sideToMove() == chess::Color::WHITE);
-
-    ImGui::SetNextWindowPos ({winW - uiWidth, 0});
-    ImGui::SetNextWindowSize({uiWidth, winH});
-
-    constexpr ImGuiWindowFlags kPanelFlags =
-        ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoResize  |
-        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar|
-        ImGuiWindowFlags_NoBringToFrontOnFocus;
-
-    ImGui::Begin("##ChessPanel", nullptr, kPanelFlags);
-    // Use Inter Regular for the whole panel
-    if (g_fontBody) ImGui::PushFont(g_fontBody);
-    float cw = ImGui::GetContentRegionAvail().x;   // usable content width
-    ImGui::Spacing();
-    // Gold title — use Bold for the main heading
-    if (g_fontBold) { ImGui::PopFont(); ImGui::PushFont(g_fontBold); }
-    ImGui::TextColored({0.784f, 0.651f, 0.267f, 1.f}, "C++ CHESS ENGINE");
-    if (g_fontBody) { ImGui::PopFont(); ImGui::PushFont(g_fontBody); }
-    // Dim subtitle
-    ImGui::TextColored({0.35f, 0.35f, 0.35f, 1.f},
-        "%.0f FPS  |  depth-4 eval", ImGui::GetIO().Framerate);
-
-    ImGui::Spacing();
-    {
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        ImVec2 p = ImGui::GetCursorScreenPos();
-        dl->AddLine(p, {p.x + cw, p.y}, IM_COL32(120, 100, 40, 180), 1.f);
-        ImGui::Dummy({cw, 1.f});
+    // Click-to-move: second click on a legal destination.
+    if (m_selected && *square != *m_selected && m_game.findMove(*m_selected, *square)) {
+        tryUserMove(*m_selected, *square);
+        return;
     }
-    ImGui::Spacing();
-    ImGui::TextColored({0.42f, 0.42f, 0.42f, 1.f}, "CLOCKS");
-    ImGui::Spacing();
 
-    float clockH = 50.f * sf_;
+    const chess::Piece piece = m_game.board().at(*square);
+    if (piece != chess::Piece::NONE && piece.color() == m_game.sideToMove()) {
+        m_deselectOnRelease = m_selected == square;
+        m_selected = square;
+        m_dragging = true;
+        m_mouse = position;
+    } else {
+        m_selected.reset();
+    }
+}
 
-    // Macro-like lambda to avoid repeating the clock-box draw code
-    auto drawClock = [&](const char* id, const char* label, float timeLeft, bool active) {
-        // Child background: subtle green tint when active
-        ImGui::PushStyleColor(ImGuiCol_ChildBg,
-            active ? ImVec4(0.12f, 0.20f, 0.10f, 1.f)
-                   : ImVec4(0.08f, 0.08f, 0.08f, 1.f));
-        ImGui::PushStyleColor(ImGuiCol_Border,
-            active ? ImVec4(0.31f, 0.54f, 0.18f, 0.90f)
-                   : ImVec4(0.16f, 0.16f, 0.16f, 1.f));
+void Application::onMouseReleased(sf::Vector2f position)
+{
+    if (!m_dragging) return;
+    m_dragging = false;
 
-        ImGui::BeginChild(id, ImVec2(cw, clockH), true);
-        {
-            // Label (dimmed)
-            ImGui::TextColored(
-                active ? ImVec4(0.56f, 0.80f, 0.42f, 1.f)
-                       : ImVec4(0.40f, 0.40f, 0.40f, 1.f),
-                "%s", label);
+    const auto square = m_renderer.squareAt(position);
+    if (!square || !m_selected) {
+        m_selected.reset();
+        return;
+    }
+    if (*square == *m_selected) { // a click: keep the piece selected, unless it already was
+        if (m_deselectOnRelease) m_selected.reset();
+        return;
+    }
+    if (m_game.findMove(*m_selected, *square)) tryUserMove(*m_selected, *square);
+    else m_selected.reset();
+}
 
-            // Time right aligned
-            std::string ts = m_isTimeless ? "--:--" : formatTime(timeLeft);
-            if (active && !m_isTimeless) ts += " <<";
-            float tw = ImGui::CalcTextSize(ts.c_str()).x;
-            ImGui::SameLine(ImGui::GetWindowWidth() - tw - 12.f * sf_);
-            ImGui::TextColored(clockColor(timeLeft), "%s", ts.c_str());
-        }
-        ImGui::EndChild();
-        ImGui::PopStyleColor(2);
+void Application::tryUserMove(chess::Square from, chess::Square to)
+{
+    m_selected.reset();
+    if (m_game.isPromotion(from, to)) {
+        m_pendingPromotion = MoveSquares{from, to};
+        return;
+    }
+    if (const auto move = m_game.findMove(from, to)) playMove(*move, false);
+}
+
+bool Application::canMovePieces() const
+{
+    return !isGameOver() && !engineIsThinking() && !m_pendingPromotion;
+}
+
+// ---------------------------------------------------------------------------
+// Game flow
+
+void Application::playMove(chess::Move move, bool byEngine)
+{
+    m_engine.cancel();
+    m_game.play(move);
+    m_selected.reset();
+    m_dragging = false;
+    m_analysis = {};
+
+    if (isGameOver()) return;
+    if (!byEngine && m_autoReply) startEngineMove();
+    else startAnalysis();
+}
+
+void Application::newGame()
+{
+    m_fenError.clear();
+    m_engine.cancel();
+    m_engine.clearMemory();
+    m_game.reset();
+    m_selected.reset();
+    m_pendingPromotion.reset();
+    m_analysis = {};
+    resetClocks();
+    startAnalysis();
+}
+
+void Application::loadPosition(const std::string& fen)
+{
+    m_engine.cancel();
+    if (!m_game.loadFen(fen)) {
+        m_fenError = "Not a valid FEN position.";
+        startAnalysis();
+        return;
+    }
+    m_fenError.clear();
+    m_fenInput.fill('\0');
+    m_engine.clearMemory();
+    m_selected.reset();
+    m_pendingPromotion.reset();
+    m_analysis = {};
+    resetClocks();
+    startAnalysis();
+}
+
+void Application::undoMove()
+{
+    m_engine.cancel();
+    if (!m_game.undo()) return;
+    m_selected.reset();
+    m_pendingPromotion.reset();
+    m_analysis = {};
+    startAnalysis();
+}
+
+void Application::resetClocks()
+{
+    const auto seconds = static_cast<float>(kTimeControls[m_timeControl].seconds);
+    m_clock = {seconds, seconds};
+    m_flagged.reset();
+}
+
+bool Application::isTimed() const { return kTimeControls[m_timeControl].seconds > 0; }
+
+void Application::tickClock(float dt)
+{
+    // Clocks start with the first move, like on most chess sites.
+    if (!isTimed() || isGameOver() || m_game.history().empty()) return;
+
+    float& clock = m_clock[m_game.sideToMove() == chess::Color::WHITE ? 0 : 1];
+    clock -= dt;
+    if (clock <= 0.f) {
+        clock = 0.f;
+        m_flagged = m_game.sideToMove();
+        m_engine.cancel();
+    }
+}
+
+bool Application::isGameOver() const { return m_flagged.has_value() || m_game.isOver(); }
+
+std::string Application::scoreSheetResult() const
+{
+    const bool whiteWon = m_flagged ? *m_flagged == chess::Color::BLACK
+                                    : m_game.sideToMove() == chess::Color::BLACK;
+    if (m_flagged || m_game.status() == core::GameStatus::Checkmate) return whiteWon ? "1-0" : "0-1";
+    return "\xC2\xBD-\xC2\xBD";
+}
+
+std::string Application::resultText() const
+{
+    if (m_flagged) return std::string(colorName(~*m_flagged)) + " wins on time";
+    const auto status = m_game.status();
+    if (status == core::GameStatus::Checkmate)
+        return std::string(colorName(~m_game.sideToMove())) + " wins by checkmate";
+    return core::statusText(status);
+}
+
+// ---------------------------------------------------------------------------
+// Engine
+
+void Application::startAnalysis()
+{
+    if (isGameOver()) return;
+    engine::SearchLimits limits;
+    limits.timeMs = kAnalysisMs;
+    m_engine.start(EngineWorker::Task::Analyse, m_game.board(), limits);
+}
+
+void Application::startEngineMove()
+{
+    if (isGameOver()) return;
+    m_selected.reset();
+    m_pendingPromotion.reset();
+    engine::SearchLimits limits;
+    limits.timeMs = m_thinkSeconds * 1000;
+    m_engine.start(EngineWorker::Task::Play, m_game.board(), limits);
+    m_thinkClock.restart();
+}
+
+bool Application::engineIsThinking() const
+{
+    return m_engine.busy() && m_engine.task() == EngineWorker::Task::Play;
+}
+
+void Application::pollEngine()
+{
+    const auto latest = m_engine.latest();
+    if (latest.depth > 0) m_analysis = latest;
+
+    const auto finished = m_engine.takeFinished();
+    if (!finished || finished->task != EngineWorker::Task::Play) return;
+    if (finished->positionKey != m_game.board().hash()) return;
+    if (finished->result.bestMove.move() == chess::Move::NO_MOVE) return;
+    playMove(finished->result.bestMove, true);
+}
+
+// ---------------------------------------------------------------------------
+// Frame
+
+void Application::updateLayout()
+{
+    const sf::Vector2f size(m_window.getSize());
+    const float s = std::clamp(size.y / 800.f, 0.8f, 2.5f);
+    Layout& l = m_layout;
+    l.scale = s;
+
+    const float panelWidth = std::clamp(size.x * 0.3f, 340.f * s, 420.f * s);
+    l.panel = {{size.x - panelWidth, 0.f}, {panelWidth, size.y}};
+
+    const float margin = 28.f * s;
+    const float barHeight = 46.f * s;
+    const float evalWidth = 30.f * s;
+    const float gap = 10.f * s;
+
+    const float maxBoardW = size.x - panelWidth - 2.f * margin - evalWidth - gap;
+    const float maxBoardH = size.y - 2.f * margin - 2.f * barHeight;
+    // A whole number of pixels per square keeps the grid crisp.
+    const float boardSize = std::floor(std::max(160.f, std::min(maxBoardW, maxBoardH)) / 8.f) * 8.f;
+
+    const float blockWidth = evalWidth + gap + boardSize;
+    const float left = std::round((size.x - panelWidth - blockWidth) / 2.f);
+    const float top = std::round((size.y - boardSize - 2.f * barHeight) / 2.f);
+
+    l.evalBar = {{left, top + barHeight}, {evalWidth, boardSize}};
+    l.board = {{left + evalWidth + gap, top + barHeight}, {boardSize, boardSize}};
+    l.topBar = {{l.board.position.x, top}, {boardSize, barHeight}};
+    l.bottomBar = {{l.board.position.x, top + barHeight + boardSize}, {boardSize, barHeight}};
+
+    m_renderer.setArea(l.board);
+}
+
+void Application::loadFonts(float scale)
+{
+    ImGuiIO& io = ImGui::GetIO();
+    io.Fonts->Clear();
+
+    ImFontConfig config;
+    config.OversampleH = 2;
+    const auto load = [&](const char* file, float size) {
+        const auto path = assetPath(file);
+        if (!std::filesystem::exists(path)) return io.Fonts->AddFontDefault();
+        return io.Fonts->AddFontFromFileTTF(path.c_str(), std::round(size * scale), &config);
     };
+    m_fonts.body = load("Inter-Regular.ttf", 15.f); // first font = ImGui default
+    m_fonts.bold = load("Inter-Bold.ttf", 15.f);
+    m_fonts.title = load("Inter-Bold.ttf", 21.f);
+    m_fonts.clock = load("Inter-Bold.ttf", 20.f);
+    m_fonts.score = load("Inter-Bold.ttf", 34.f);
 
-    drawClock("##BlackClock", "BLACK", m_blackTimeLeft, !m_gameOver && !whiteTurn);
-    ImGui::Spacing();
-    drawClock("##WhiteClock", "WHITE", m_whiteTimeLeft, !m_gameOver &&  whiteTurn);
-
-    ImGui::Spacing();
-    ImGui::Checkbox("Timeless Mode", &m_isTimeless);
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-    ImGui::TextColored({0.42f, 0.42f, 0.42f, 1.f}, "EVALUATION");
-    ImGui::Spacing();
-
-    // Visual bar: white (left) vs black (right)
-    {
-        ImDrawList* dl  = ImGui::GetWindowDrawList();
-        ImVec2 p        = ImGui::GetCursorScreenPos();
-        float  barH     = 18.f * sf_;
-        float  clampEv  = std::max(-10.f, std::min(10.f, m_currentEval));
-        float  wRatio   = std::max(0.04f, std::min(0.96f, 0.5f + clampEv / 20.f));
-        float  r        = 4.f;
-        // Black background (full bar)
-        dl->AddRectFilled(p, {p.x + cw, p.y + barH}, IM_COL32(28, 28, 28, 255), r);
-        // White portion
-        dl->AddRectFilled(p, {p.x + cw * wRatio, p.y + barH}, IM_COL32(228, 222, 205, 255), r);
-        // Center tick
-        float cx = p.x + cw * 0.5f;
-        dl->AddLine({cx, p.y + 2}, {cx, p.y + barH - 2}, IM_COL32(90, 90, 90, 180), 1.5f);
-        // Evaluation needle
-        float nx = p.x + cw * wRatio;
-        dl->AddRectFilled({nx - 2.f, p.y}, {nx + 2.f, p.y + barH}, IM_COL32(200, 170, 80, 220));
-
-        ImGui::Dummy({cw, barH});
-    }
-    ImGui::Spacing();
-    // Evaluation text
-    {
-        char evBuf[32];
-        std::snprintf(evBuf, sizeof(evBuf), "%+.2f", m_currentEval);
-        if (m_currentEval >  0.15f)
-            ImGui::TextColored({0.86f, 0.86f, 0.82f, 1.f}, "%s  White is better", evBuf);
-        else if (m_currentEval < -0.15f)
-            ImGui::TextColored({0.52f, 0.52f, 0.52f, 1.f}, "%s  Black is better", evBuf);
-        else
-            ImGui::TextColored({0.45f, 0.45f, 0.45f, 1.f}, "%s  Equal position",  evBuf);
-    }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-
-    // Lambda for a coloured status box
-    auto drawBadge = [&](const char* id, ImVec4 bg, ImVec4 border,
-                         ImVec4 labelCol, const char* labelTxt,
-                         ImVec4 bodyCol,  const char* bodyFmt, const char* bodyArg) {
-        float badgeH = 40.f * sf_;
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, bg);
-        ImGui::PushStyleColor(ImGuiCol_Border,  border);
-        ImGui::BeginChild(id, ImVec2(cw, badgeH), true);
-        ImGui::TextColored(labelCol, "%s", labelTxt);
-        ImGui::SameLine();
-        char tmp[128];
-        std::snprintf(tmp, sizeof(tmp), bodyFmt, bodyArg);
-        ImGui::TextColored(bodyCol, "%s", tmp);
-        ImGui::EndChild();
-        ImGui::PopStyleColor(2);
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-    };
-
-    if (m_gameOver) {
-        if (m_board.isCheckmate()) {
-            const char* winner = (m_matedColor == chess::Color::WHITE) ? "Black" : "White";
-            drawBadge("##CM",
-                {0.22f,0.04f,0.04f,1.f}, {0.65f,0.08f,0.08f,1.f},
-                {1.f,0.22f,0.22f,1.f},   "CHECKMATE",
-                {0.88f,0.88f,0.88f,1.f}, "- %s wins!", winner);
-        } else {
-            const char* loser = (m_matedColor == chess::Color::WHITE) ? "White" : "Black";
-            drawBadge("##TO",
-                {0.18f,0.11f,0.02f,1.f}, {0.65f,0.45f,0.08f,1.f},
-                {1.f,0.70f,0.00f,1.f},   "TIME'S UP!",
-                {0.88f,0.88f,0.88f,1.f}, "%s loses!", loser);
-        }
-    } else if (m_board.isInCheck()) {
-        const char* side = whiteTurn ? "White" : "Black";
-        drawBadge("##CHK",
-            {0.20f,0.04f,0.04f,1.f}, {0.60f,0.06f,0.06f,1.f},
-            {1.f,0.22f,0.22f,1.f},   "CHECK",
-            {0.72f,0.72f,0.72f,1.f}, "- %s king is in danger!", side);
-    }
-
-    if (!m_gameOver) {
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 7.f);
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,  ImVec2(12.f, 9.f));
-        if (ImGui::Button("Predict Best Next Move  (6 sec)", ImVec2(-1.f, 42.f * sf_))) {
-            std::string best = engine::getBestMoveTime(m_board.getInternalBoard(), 6000);
-            m_board.tryMove(best);
-            m_moveHistory.push_back(best);
-            m_moveClock.restart();
-            updateEvaluation();
-            if (m_board.isCheckmate()) { m_gameOver = true; m_matedColor = m_board.sideToMove(); }
-        }
-        ImGui::PopStyleVar(2);
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-    }
-
-    ImGui::TextColored({0.42f, 0.42f, 0.42f, 1.f}, "MOVE HISTORY");
-    ImGui::Spacing();
-
-    float histH = ImGui::GetContentRegionAvail().y - 6.f;
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.08f, 0.08f, 0.08f, 1.f));
-    ImGui::BeginChild("##MoveLog", ImVec2(0, histH), true);
-
-    for (size_t i = 0; i < m_moveHistory.size(); i += 2) {
-        int moveNum = static_cast<int>(i / 2 + 1);
-
-        // Subtle zebra stripe (every other pair)
-        if ((i / 2) % 2 == 0) {
-            ImVec2 rMin = ImGui::GetCursorScreenPos();
-            ImVec2 rMax = {rMin.x + ImGui::GetContentRegionAvail().x,
-                           rMin.y + ImGui::GetTextLineHeightWithSpacing()};
-            ImGui::GetWindowDrawList()->AddRectFilled(rMin, rMax, IM_COL32(255, 255, 255, 8));
-        }
-
-        // Move number
-        ImGui::TextColored({0.36f, 0.36f, 0.36f, 1.f}, "%2d.", moveNum);
-        ImGui::SameLine(32.f * sf_);
-        // White's move
-        ImGui::TextColored({0.86f, 0.86f, 0.84f, 1.f}, "%-7s", m_moveHistory[i].c_str());
-        // Black's move (if exists)
-        if (i + 1 < m_moveHistory.size()) {
-            ImGui::SameLine(88.f * sf_);
-            ImGui::TextColored({0.55f, 0.55f, 0.55f, 1.f}, "%s", m_moveHistory[i + 1].c_str());
-        }
-    }
-
-    if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) ImGui::SetScrollHereY(1.f);
-    ImGui::EndChild();
-    ImGui::PopStyleColor();
-
-    // Balance the PushFont at the top of this window
-    if (g_fontBody) ImGui::PopFont();
-    ImGui::End();
+    if (!ImGui::SFML::UpdateFontTexture()) throw std::runtime_error("Failed to build the font atlas");
+    applyStyle(scale);
+    m_fontScale = scale;
 }
 
-void Application::render() {
-    m_window.clear(sf::Color(20, 20, 20));
-    bool showHighlight = m_board.isInCheck();
-    chess::Color checkedSide = m_board.sideToMove();
-    m_boardRenderer.render(m_window, m_board.getFen(), showHighlight, checkedSide);
+void Application::update(float dt)
+{
+    // Fonts can only be rebuilt between frames.
+    if (std::abs(m_layout.scale - m_fontScale) > 0.01f) loadFonts(m_layout.scale);
+
+    ImGui::SFML::Update(m_window, sf::seconds(dt));
+
+    pollEngine();
+    tickClock(dt);
+
+    float target = m_evalShare;
+    if (isGameOver()) {
+        const std::string result = scoreSheetResult();
+        target = result == "1-0" ? 1.f : result == "0-1" ? 0.f : 0.5f;
+    } else if (m_analysis.depth > 0) {
+        target = evalBarShare(m_analysis.score);
+    }
+    m_evalShare += (target - m_evalShare) * std::min(1.f, dt * 8.f);
+
+    const chess::Color top = m_flipped ? chess::Color::WHITE : chess::Color::BLACK;
+    drawPlayerBar("##TopPlayer", m_layout.topBar, top);
+    drawPlayerBar("##BottomPlayer", m_layout.bottomBar, ~top);
+    drawPanel();
+    drawPromotionPicker();
+}
+
+BoardScene Application::buildScene() const
+{
+    BoardScene scene;
+    scene.board = &m_game.board();
+
+    if (const auto last = m_game.lastMove()) scene.lastMove = MoveSquares{last->from(), core::targetSquare(*last)};
+    if (m_game.inCheck()) scene.checkedKing = m_game.board().kingSq(m_game.sideToMove());
+
+    if (m_selected) {
+        scene.selected = m_selected;
+        for (const auto& move : m_game.legalMovesFrom(*m_selected)) {
+            const auto to = core::targetSquare(move);
+            if (std::find(scene.legalTargets.begin(), scene.legalTargets.end(), to) == scene.legalTargets.end())
+                scene.legalTargets.push_back(to);
+        }
+        if (m_dragging) {
+            scene.dragFrom = m_selected;
+            scene.dragPosition = m_mouse;
+        }
+    }
+
+    const bool hasSuggestion = m_analysis.depth > 0 && m_analysis.bestMove.move() != chess::Move::NO_MOVE;
+    if (m_showArrow && hasSuggestion && !isGameOver() && !m_pendingPromotion)
+        scene.arrow = MoveSquares{m_analysis.bestMove.from(), core::targetSquare(m_analysis.bestMove)};
+    return scene;
+}
+
+void Application::render()
+{
+    m_window.clear(color::Background);
+
+    m_renderer.setFlipped(m_flipped);
+    m_renderer.setTheme(kBoardThemes[m_boardTheme]);
+    m_renderer.draw(m_window, buildScene());
+
+    sf::String label;
+    if (isGameOver()) {
+        std::string result = scoreSheetResult();
+        if (result.size() > 3) result = "\xC2\xBD"; // a draw: the full "1/2-1/2" is too wide
+        label = sf::String::fromUtf8(result.begin(), result.end());
+    } else if (m_analysis.depth > 0) {
+        label = formatScore(m_analysis.score, false);
+    }
+    m_renderer.drawEvalBar(m_window, m_layout.evalBar, m_evalShare, label);
 
     ImGui::SFML::Render(m_window);
     m_window.display();
-}}
+}
+
+} // namespace gui

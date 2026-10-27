@@ -1,176 +1,267 @@
 #include "gui/board_renderer.hpp"
-#include <iostream>
-#include <algorithm>
+
+#include "gui/assets.hpp"
+
+#include <cmath>
+#include <stdexcept>
 
 namespace gui {
+namespace {
+
+// Column of each piece type in pieces.png (white on the top row, black below),
+// indexed by chess::PieceType: pawn, knight, bishop, rook, queen, king.
+int spriteColumn(chess::PieceType type)
+{
+    static constexpr int kColumns[] = {5, 3, 2, 4, 1, 0};
+    const int index = static_cast<int>(type);
+    return index >= 0 && index < 6 ? kColumns[index] : -1;
+}
+
+sf::Color withAlpha(sf::Color c, std::uint8_t alpha)
+{
+    c.a = alpha;
+    return c;
+}
+
+sf::ConvexShape polygon(std::initializer_list<sf::Vector2f> points, sf::Color fill)
+{
+    sf::ConvexShape shape(points.size());
+    std::size_t i = 0;
+    for (const auto& p : points) shape.setPoint(i++, p);
+    shape.setFillColor(fill);
+    return shape;
+}
+
+} // namespace
 
 BoardRenderer::BoardRenderer()
-    : m_squareSize(80.0f),
-      m_boardOffset(50.0f, 50.0f),
-      m_pieceSprite(m_pieceTexture)
 {
-    if (!m_pieceTexture.loadFromFile("../assets/pieces.png"))
-        std::cerr << "Failed to load piece texture!" << std::endl;
-    // Use Inter Regular for crisp coordinate labels
-    if (!m_font.openFromFile("../assets/Inter-Regular.ttf"))
-        if (!m_font.openFromFile("../assets/font.ttf"))   // fallback
-            std::cerr << "Warning: Could not load coordinate font!" << std::endl;
+    if (!m_pieceTexture.loadFromFile(assetPath("pieces.png")))
+        throw std::runtime_error("Could not load assets/pieces.png");
     m_pieceTexture.setSmooth(true);
-    sf::Vector2u texSize = m_pieceTexture.getSize();
-    float pw = texSize.x / 6.f, ph = texSize.y / 2.f;
-    m_pieceSprite.setScale({m_squareSize / pw, m_squareSize / ph});
+    (void)m_pieceTexture.generateMipmap(); // sharper pieces when scaled down; optional
+
+    if (!m_font.openFromFile(assetPath("Inter-Bold.ttf")))
+        throw std::runtime_error("Could not load assets/Inter-Bold.ttf");
 }
 
-sf::IntRect BoardRenderer::getTextureRectForPiece(char piece) const {
-    sf::Vector2u texSize = m_pieceTexture.getSize();
-    int pw = texSize.x / 6, ph = texSize.y / 2;
-    int row = std::islower(piece) ? 1 : 0, col = 0;
-    switch (std::tolower(piece)) {
-        case 'k': col = 0; break;
-        case 'q': col = 1; break;
-        case 'b': col = 2; break;
-        case 'n': col = 3; break;
-        case 'r': col = 4; break;
-        case 'p': col = 5; break;
-        default: return {{0, 0}, {0, 0}};
-    }
-    return {{col * pw, row * ph}, {pw, ph}};
-}
-
-void BoardRenderer::render(sf::RenderWindow& window, const std::string& fen,
-                           bool highlightKing, chess::Color kingColor)
+sf::IntRect BoardRenderer::pieceRect(chess::Piece piece) const
 {
-    // ── geometry ────────────────────────────────────────────────────────────
-    float scaleFactor   = static_cast<float>(window.getSize().y) / 768.0f;
-    float uiPanelWidth  = 390.0f * scaleFactor;   // must match application.cpp
-    float availableW    = window.getSize().x - uiPanelWidth;
-    float availableH    = window.getSize().y;
-    float maxBoardSize  = std::min(availableW, availableH) * 0.88f;
+    const int column = spriteColumn(piece.type());
+    if (column < 0) return {};
+    const auto size = m_pieceTexture.getSize();
+    const int w = static_cast<int>(size.x) / 6;
+    const int h = static_cast<int>(size.y) / 2;
+    const int row = piece.color() == chess::Color::WHITE ? 0 : 1;
+    return {{column * w, row * h}, {w, h}};
+}
 
-    m_squareSize   = maxBoardSize / 8.f;
-    m_boardOffset.x = (availableW  - maxBoardSize) / 2.f;
-    m_boardOffset.y = (availableH  - maxBoardSize) / 2.f;
+sf::Vector2f BoardRenderer::squareTopLeft(chess::Square sq) const
+{
+    const int file = sq.index() % 8;
+    const int rank = sq.index() / 8;
+    const int col = m_flipped ? 7 - file : file;
+    const int row = m_flipped ? rank : 7 - rank;
+    return {m_area.position.x + col * squareSize(), m_area.position.y + row * squareSize()};
+}
 
-    sf::Vector2u texSize = m_pieceTexture.getSize();
-    float pw = texSize.x / 6.f, ph = texSize.y / 2.f;
-    m_pieceSprite.setScale({m_squareSize / pw, m_squareSize / ph});
+std::optional<chess::Square> BoardRenderer::squareAt(sf::Vector2f pixel) const
+{
+    if (!m_area.contains(pixel)) return std::nullopt;
+    const int col = std::min(7, static_cast<int>((pixel.x - m_area.position.x) / squareSize()));
+    const int row = std::min(7, static_cast<int>((pixel.y - m_area.position.y) / squareSize()));
+    const int file = m_flipped ? 7 - col : col;
+    const int rank = m_flipped ? row : 7 - row;
+    return chess::Square(rank * 8 + file);
+}
 
-    // ── board frame / shadow ────────────────────────────────────────────────
-    {
-        float fp = m_squareSize * 0.09f;   // frame padding
+void BoardRenderer::draw(sf::RenderTarget& target, const BoardScene& scene) const
+{
+    drawSquares(target, scene);
+    drawCoordinates(target);
+    if (scene.checkedKing) drawCheck(target, *scene.checkedKing);
+    drawMoveHints(target, scene);
+    drawPieces(target, scene);
+    if (scene.arrow) drawArrow(target, *scene.arrow);
 
-        // Drop shadow (offset slightly)
-        sf::RectangleShape shadow({maxBoardSize + fp * 2 + 6, maxBoardSize + fp * 2 + 6});
-        shadow.setFillColor(sf::Color(6, 6, 6, 200));
-        shadow.setPosition({m_boardOffset.x - fp - 3, m_boardOffset.y - fp - 3});
-        window.draw(shadow);
+    if (scene.dragFrom) {
+        const chess::Piece piece = scene.board->at(*scene.dragFrom);
+        sf::Sprite sprite(m_pieceTexture, pieceRect(piece));
+        const float size = squareSize() * 1.08f; // lifted pieces look slightly bigger
+        sprite.setScale({size / sprite.getTextureRect().size.x, size / sprite.getTextureRect().size.y});
+        sprite.setPosition(scene.dragPosition - sf::Vector2f(size, size) / 2.f);
+        target.draw(sprite);
+    }
+}
 
-        // Wooden frame
-        sf::RectangleShape frame({maxBoardSize + fp * 2, maxBoardSize + fp * 2});
-        frame.setFillColor(sf::Color(38, 26, 14));   // dark walnut
-        frame.setPosition({m_boardOffset.x - fp, m_boardOffset.y - fp});
-        window.draw(frame);
+void BoardRenderer::drawSquares(sf::RenderTarget& target, const BoardScene& scene) const
+{
+    const float size = squareSize();
+    sf::RectangleShape square({size, size});
+
+    for (int sq = 0; sq < 64; ++sq) {
+        const bool light = (sq / 8 + sq % 8) % 2 == 1;
+        square.setPosition(squareTopLeft(chess::Square(sq)));
+        square.setFillColor(light ? m_theme.light : m_theme.dark);
+        target.draw(square);
     }
 
-    // ── squares ─────────────────────────────────────────────────────────────
-    // Chess.com classic wood palette
-    const sf::Color lightSq(240, 217, 181);   // cream
-    const sf::Color darkSq (181, 136,  99);   // wood brown
-
-    sf::RectangleShape square({m_squareSize, m_squareSize});
-    for (int rank = 0; rank < 8; ++rank) {
-        for (int file = 0; file < 8; ++file) {
-            square.setFillColor((rank + file) % 2 == 0 ? lightSq : darkSq);
-            square.setPosition({m_boardOffset.x + file * m_squareSize,
-                                m_boardOffset.y + rank * m_squareSize});
-            window.draw(square);
+    square.setFillColor(color::Highlight);
+    if (scene.lastMove) {
+        for (const auto sq : {scene.lastMove->from, scene.lastMove->to}) {
+            square.setPosition(squareTopLeft(sq));
+            target.draw(square);
         }
     }
-
-    // ── pieces ──────────────────────────────────────────────────────────────
-    {
-        int rank = 0, file = 0;
-        for (char c : fen) {
-            if (c == ' ') break;
-            if (c == '/') { rank++; file = 0; }
-            else if (std::isdigit(c)) { file += (c - '0'); }
-            else {
-                sf::IntRect tr = getTextureRectForPiece(c);
-                if (tr.size.x > 0) {
-                    m_pieceSprite.setTextureRect(tr);
-                    m_pieceSprite.setPosition({m_boardOffset.x + file * m_squareSize,
-                                               m_boardOffset.y + rank * m_squareSize});
-                    window.draw(m_pieceSprite);
-                }
-                file++;
-            }
-        }
+    if (scene.selected) {
+        square.setFillColor(withAlpha(color::Highlight, 150));
+        square.setPosition(squareTopLeft(*scene.selected));
+        target.draw(square);
     }
+}
 
-    // ── checkmate / check king highlight (Lichess-style vivid red) ──────────
-    if (highlightKing) {
-        char kingChar = (kingColor == chess::Color::WHITE) ? 'K' : 'k';
-        int kingFile = -1, kingRank = -1;
-        int r = 0, f = 0;
-        for (char c : fen) {
-            if (c == ' ') break;
-            if (c == '/')              { r++; f = 0; }
-            else if (std::isdigit(c)) { f += (c - '0'); }
-            else {
-                if (c == kingChar) { kingFile = f; kingRank = r; }
-                f++;
-            }
-        }
-        if (kingFile >= 0 && kingRank >= 0) {
-            float thickness = std::max(3.f, m_squareSize * 0.065f);
-            sf::RectangleShape hl({m_squareSize, m_squareSize});
-            hl.setFillColor(sf::Color(204, 0, 0, 140));    // vivid red ~55% opacity
-            hl.setOutlineColor(sf::Color(204, 0, 0, 255)); // solid border
-            hl.setOutlineThickness(-thickness);             // inset
-            hl.setPosition({m_boardOffset.x + kingFile * m_squareSize,
-                            m_boardOffset.y + kingRank * m_squareSize});
-            window.draw(hl);
-        }
-    }
-
-    // ── coordinates ─────────────────────────────────────────────────────────
-    int   fontSize = static_cast<int>(m_squareSize * 0.18f);
-    float padding  = m_squareSize * 0.05f;
+void BoardRenderer::drawCoordinates(sf::RenderTarget& target) const
+{
+    const float size = squareSize();
+    const float pad = size * 0.06f;
+    sf::Text text(m_font, "", static_cast<unsigned>(size * 0.16f));
 
     for (int i = 0; i < 8; ++i) {
-        // On a chess.com board, rank labels on the left edge of each square
-        // use the opposite square colour so they contrast with the background.
-        bool rankOnLight = (i % 2 == 0); // rank 8 is on a light square (file a)
-        bool fileOnLight = ((7 + i) % 2 == 0);
+        // Rank numbers along the left edge, file letters along the bottom edge,
+        // each drawn in the colour of the opposite square for contrast.
+        const int rank = m_flipped ? i : 7 - i;
+        const int leftFile = m_flipped ? 7 : 0;
+        const bool rankSquareLight = (rank + leftFile) % 2 == 1;
+        text.setString(std::string(1, static_cast<char>('1' + rank)));
+        text.setFillColor(rankSquareLight ? m_theme.dark : m_theme.light);
+        const auto rankBounds = text.getLocalBounds();
+        text.setPosition({m_area.position.x + pad - rankBounds.position.x,
+                          m_area.position.y + i * size + pad - rankBounds.position.y});
+        target.draw(text);
 
-        // Rank numbers (left side)
-        sf::Text rankText(m_font);
-        rankText.setString(std::to_string(8 - i));
-        rankText.setCharacterSize(fontSize);
-        rankText.setFillColor(rankOnLight ? darkSq : lightSq);
-        sf::FloatRect rb = rankText.getLocalBounds();
-        rankText.setPosition({m_boardOffset.x + padding - rb.position.x,
-                              m_boardOffset.y + i * m_squareSize + padding - rb.position.y});
-        window.draw(rankText);
-
-        // File letters (bottom side)
-        sf::Text fileText(m_font);
-        fileText.setString(std::string(1, 'a' + i));
-        fileText.setCharacterSize(fontSize);
-        fileText.setFillColor(fileOnLight ? darkSq : lightSq);
-        sf::FloatRect fb = fileText.getLocalBounds();
-        fileText.setPosition({
-            m_boardOffset.x + i * m_squareSize + m_squareSize - fb.size.x - fb.position.x - padding,
-            m_boardOffset.y + 7 * m_squareSize + m_squareSize - fb.size.y - fb.position.y - padding
-        });
-        window.draw(fileText);
+        const int file = m_flipped ? 7 - i : i;
+        const int bottomRank = m_flipped ? 7 : 0;
+        const bool fileSquareLight = (bottomRank + file) % 2 == 1;
+        text.setString(std::string(1, static_cast<char>('a' + file)));
+        text.setFillColor(fileSquareLight ? m_theme.dark : m_theme.light);
+        const auto fileBounds = text.getLocalBounds();
+        text.setPosition({m_area.position.x + (i + 1) * size - pad - fileBounds.size.x - fileBounds.position.x,
+                          m_area.position.y + 8 * size - pad - fileBounds.size.y - fileBounds.position.y});
+        target.draw(text);
     }
 }
 
-std::string BoardRenderer::getSquareFromPixel(int x, int y) const {
-    int file = static_cast<int>((x - m_boardOffset.x) / m_squareSize);
-    int rank = static_cast<int>((y - m_boardOffset.y) / m_squareSize);
-    if (file >= 0 && file < 8 && rank >= 0 && rank < 8)
-        return std::string(1, 'a' + file) + static_cast<char>('8' - rank);
-    return "";
-}}
+void BoardRenderer::drawCheck(sf::RenderTarget& target, chess::Square king) const
+{
+    // Radial red glow under the king in check.
+    const float size = squareSize();
+    const sf::Vector2f center = squareTopLeft(king) + sf::Vector2f(size, size) / 2.f;
+    constexpr int kSegments = 40;
+    sf::VertexArray glow(sf::PrimitiveType::TriangleFan, kSegments + 2);
+    glow[0] = sf::Vertex{center, sf::Color(255, 0, 0, 230)};
+    for (int i = 0; i <= kSegments; ++i) {
+        const float angle = 2.f * 3.14159265f * static_cast<float>(i) / kSegments;
+        glow[i + 1] = sf::Vertex{center + sf::Vector2f(std::cos(angle), std::sin(angle)) * size * 0.55f,
+                                 sf::Color(200, 0, 0, 0)};
+    }
+    target.draw(glow);
+}
+
+void BoardRenderer::drawMoveHints(sf::RenderTarget& target, const BoardScene& scene) const
+{
+    const float size = squareSize();
+    const sf::Color hint(20, 30, 20, 60);
+
+    for (const auto sq : scene.legalTargets) {
+        const sf::Vector2f topLeft = squareTopLeft(sq);
+        if (scene.board->at(sq) == chess::Piece::NONE) {
+            const float radius = size * 0.16f;
+            sf::CircleShape dot(radius);
+            dot.setFillColor(hint);
+            dot.setPosition(topLeft + sf::Vector2f(size / 2.f - radius, size / 2.f - radius));
+            target.draw(dot);
+        } else {
+            const float thickness = size * 0.08f;
+            sf::CircleShape ring(size / 2.f - thickness);
+            ring.setFillColor(sf::Color::Transparent);
+            ring.setOutlineColor(hint);
+            ring.setOutlineThickness(thickness);
+            ring.setPosition(topLeft + sf::Vector2f(thickness, thickness));
+            target.draw(ring);
+        }
+    }
+}
+
+void BoardRenderer::drawPieces(sf::RenderTarget& target, const BoardScene& scene) const
+{
+    const float size = squareSize();
+    sf::Sprite sprite(m_pieceTexture);
+
+    for (int sq = 0; sq < 64; ++sq) {
+        const chess::Piece piece = scene.board->at(chess::Square(sq));
+        if (piece == chess::Piece::NONE) continue;
+
+        sprite.setTextureRect(pieceRect(piece));
+        sprite.setScale({size / sprite.getTextureRect().size.x, size / sprite.getTextureRect().size.y});
+        sprite.setPosition(squareTopLeft(chess::Square(sq)));
+        // The dragged piece leaves a faint ghost on its starting square.
+        sprite.setColor(scene.dragFrom && scene.dragFrom->index() == sq ? sf::Color(255, 255, 255, 70)
+                                                                        : sf::Color::White);
+        target.draw(sprite);
+    }
+}
+
+void BoardRenderer::drawArrow(sf::RenderTarget& target, MoveSquares move) const
+{
+    const float size = squareSize();
+    const sf::Vector2f half(size / 2.f, size / 2.f);
+    const sf::Vector2f start = squareTopLeft(move.from) + half;
+    const sf::Vector2f end = squareTopLeft(move.to) + half;
+    const sf::Vector2f delta = end - start;
+    const float length = std::hypot(delta.x, delta.y);
+    if (length < 1.f) return;
+
+    const sf::Vector2f dir = delta / length;
+    const sf::Vector2f normal(-dir.y, dir.x);
+    const float shaftHalf = size * 0.09f;
+    const float headHalf = size * 0.24f;
+    const float headLength = size * 0.42f;
+    const sf::Vector2f tip = end - dir * (size * 0.12f);
+    const sf::Vector2f base = tip - dir * headLength;
+
+    target.draw(polygon({start + normal * shaftHalf, base + normal * shaftHalf,
+                         base - normal * shaftHalf, start - normal * shaftHalf},
+                        color::Arrow));
+    target.draw(polygon({base + normal * headHalf, tip, base - normal * headHalf}, color::Arrow));
+}
+
+void BoardRenderer::drawEvalBar(sf::RenderTarget& target, sf::FloatRect rect, float whiteShare,
+                                const sf::String& label) const
+{
+    sf::RectangleShape background(rect.size);
+    background.setPosition(rect.position);
+    background.setFillColor(color::EvalBlack);
+    target.draw(background);
+
+    // White's share grows from White's side of the board.
+    const float whiteHeight = rect.size.y * whiteShare;
+    sf::RectangleShape white({rect.size.x, whiteHeight});
+    white.setPosition({rect.position.x, m_flipped ? rect.position.y : rect.position.y + rect.size.y - whiteHeight});
+    white.setFillColor(color::EvalWhite);
+    target.draw(white);
+
+    // Score label sits at the end of the side that is ahead.
+    const bool whiteAhead = whiteShare >= 0.5f;
+    const bool labelAtBottom = whiteAhead != m_flipped;
+    sf::Text text(m_font, label, static_cast<unsigned>(rect.size.x * 0.36f));
+    text.setFillColor(whiteAhead ? color::EvalBlack : color::EvalWhite);
+    const auto bounds = text.getLocalBounds();
+    const float pad = rect.size.x * 0.25f;
+    const float x = rect.position.x + (rect.size.x - bounds.size.x) / 2.f - bounds.position.x;
+    const float y = labelAtBottom ? rect.position.y + rect.size.y - pad - bounds.size.y - bounds.position.y
+                                  : rect.position.y + pad - bounds.position.y;
+    text.setPosition({std::round(x), std::round(y)});
+    target.draw(text);
+}
+
+} // namespace gui
