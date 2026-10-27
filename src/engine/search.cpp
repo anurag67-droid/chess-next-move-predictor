@@ -1,333 +1,369 @@
 #include "engine/search.hpp"
+
 #include "engine/evaluation.hpp"
+
 #include <algorithm>
-#include <iostream>
-#include <vector>
 #include <chrono>
 #include <thread>
-#include <atomic>
-#include <mutex>
+#include <vector>
 
 namespace engine {
 
-std::atomic<long long> nodes{0};
-std::atomic<bool> timeIsUp{false};
-std::chrono::time_point<std::chrono::steady_clock> startTime;
-int limitMs = 0;
-enum HashFlag{ HASH_EXACT, HASH_ALPHA, HASH_BETA };
-struct TTEntry {
-    std::atomic<uint64_t> key{0};
-    std::atomic<uint64_t> data{0};
-};
-const int TT_SIZE = 1000000;
-std::vector<TTEntry> transpositionTable(TT_SIZE);
+using Clock = std::chrono::steady_clock;
 
-bool readTT(uint64_t hash, int& depth, int& score, HashFlag& flag, chess::Move& bestMove) {
-    int ttIndex = hash % TT_SIZE;
-    uint64_t k = transpositionTable[ttIndex].key.load(std::memory_order_relaxed);
-    uint64_t d = transpositionTable[ttIndex].data.load(std::memory_order_relaxed);
-    if ((k ^ d) == hash) {
-        depth = static_cast<int>(d & 0xFF);
-        int16_t signedScore = static_cast<int16_t>((d >> 8) & 0xFFFF);
-        score = static_cast<int>(signedScore);
-        flag = static_cast<HashFlag>((d >> 24) & 0x3);
-        bestMove = chess::Move(static_cast<uint16_t>((d >> 26) & 0xFFFF));
-        return true;
-    }
-    return false;
-}
+namespace {
 
-void writeTT(uint64_t hash, int depth, int score, HashFlag flag, chess::Move bestMove) {
-    int ttIndex = hash % TT_SIZE;
-    uint64_t d = 0;
-    d |= (static_cast<uint64_t>(depth) & 0xFF);
-    d |= ((static_cast<uint64_t>(static_cast<uint16_t>(score))) & 0xFFFF) << 8;
-    d |= (static_cast<uint64_t>(flag) & 0x3) << 24;
-    d |= (static_cast<uint64_t>(bestMove.move()) & 0xFFFF) << 26;
+constexpr int kInfinity = kMateScore + 1;
+constexpr int kMateBound = kMateScore - kMaxPly;
+constexpr int kNullMoveReduction = 2;
+constexpr std::uint64_t kNodeBatch = 1024; // how often a thread checks the clock
 
-    transpositionTable[ttIndex].data.store(d, std::memory_order_relaxed);
-    transpositionTable[ttIndex].key.store(hash ^ d, std::memory_order_relaxed);
-}
+enum class Bound : std::uint8_t { Exact, Upper, Lower };
 
-int scoreMove(const chess::Board& board, const chess::Move& move) {
-    int score = 0;
-    if (move.typeOf() == chess::Move::PROMOTION) score += 900; 
-    if (board.isCapture(move)){
-        auto getPieceValue = [](chess::PieceType pt) {
-            if (pt == chess::PieceType::PAWN) return 100;
-            else if (pt == chess::PieceType::KNIGHT) return 320;
-            else if (pt == chess::PieceType::BISHOP) return 330;
-            else if (pt == chess::PieceType::ROOK) return 500;
-            else if (pt == chess::PieceType::QUEEN) return 900;
-            else if (pt == chess::PieceType::KING) return 20000;
-            return 0;
-        };
-
-        int victimValue = getPieceValue(board.at(move.to()).type());
-        int attackerValue = getPieceValue(board.at(move.from()).type());
-        score += (10 * victimValue) - attackerValue;
-    }
+// Mate scores are stored relative to the node instead of the root so they stay
+// valid when the same position is reached at a different ply.
+int scoreToTT(int score, int ply)
+{
+    if (score >= kMateBound) return score + ply;
+    if (score <= -kMateBound) return score - ply;
     return score;
 }
 
-int quiescence(chess::Board& board, int alpha, int beta, bool isMaximizing) {
-    nodes.fetch_add(1, std::memory_order_relaxed);
-    if (board.isRepetition() || board.isHalfMoveDraw() || board.isInsufficientMaterial()) return 0;
-    bool inCheck = board.inCheck();
-    int standPat = evaluate(board);
-    if (!inCheck) {
-        if (isMaximizing) {
-            if (standPat >= beta) return beta;
-            if (alpha < standPat) alpha = standPat;
-        } else {
-            if (standPat <= alpha) return alpha;
-            if (beta > standPat) beta = standPat;
-        }
-    }
-    chess::Movelist moves;
-    chess::movegen::legalmoves(moves, board);
-    if (moves.empty()) {
-        if (inCheck) return isMaximizing ? -20000 : 20000;
-        return 0; 
-    }
-    std::sort(moves.begin(), moves.end(), [&board](const chess::Move& a, const chess::Move& b){
-        return scoreMove(board, a) > scoreMove(board, b);
-    });
-    if (isMaximizing) {
-        int maxScore = inCheck ? -99999 : standPat;
-        for (const auto& move : moves) {
-            if (!inCheck && !board.isCapture(move)) continue;
-            
-            board.makeMove(move);
-            int score = quiescence(board, alpha, beta, false);
-            board.unmakeMove(move);
-
-            if (timeIsUp.load(std::memory_order_relaxed)) return 0;
-            if (score > maxScore) maxScore = score;
-            if (score > alpha) alpha = score;
-            if (beta <= alpha) break;
-        }
-        return maxScore;
-    } else {
-        int minScore = inCheck ? 99999 : standPat;
-        for (const auto& move : moves) {
-            if (!inCheck && !board.isCapture(move)) continue;
-            
-            board.makeMove(move);
-            int score = quiescence(board, alpha, beta, true);
-            board.unmakeMove(move);
-
-            if (timeIsUp.load(std::memory_order_relaxed)) return 0;
-            if (score < minScore) minScore = score;
-            if (score < beta) beta = score;
-            if (beta <= alpha) break;
-        }
-        return minScore;
-    }
+int scoreFromTT(int score, int ply)
+{
+    if (score >= kMateBound) return score - ply;
+    if (score <= -kMateBound) return score + ply;
+    return score;
 }
 
-int minimax(chess::Board& board, int depth, int alpha, int beta, bool isMaximizing) {
-    long long n = nodes.fetch_add(1, std::memory_order_relaxed);
-    if ((n & 2047) == 0){
-        auto now = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count();
-        if (elapsed >= limitMs) timeIsUp.store(true, std::memory_order_relaxed);
-    }
-    if (timeIsUp.load(std::memory_order_relaxed)) return 0;
-    
-    if (board.isRepetition() || board.isHalfMoveDraw() || board.isInsufficientMaterial()) return 0;
-    
-    uint64_t hash = board.zobrist();
-    int ttDepth, ttScore;
-    HashFlag ttFlag;
-    chess::Move ttMove = chess::Move(0);
+int pieceValue(chess::PieceType type)
+{
+    static constexpr int kValues[] = {100, 320, 330, 500, 900, 20000, 0};
+    return kValues[static_cast<int>(type)];
+}
 
-    if (readTT(hash, ttDepth, ttScore, ttFlag, ttMove)) {
-        if (ttDepth >= depth) {
-            if (ttFlag == HASH_EXACT) return ttScore;
-            if (ttFlag == HASH_ALPHA && ttScore <= alpha) return alpha;
-            if (ttFlag == HASH_BETA && ttScore >= beta) return beta;
-        }
-    }
-
-    if (depth <= 0) return quiescence(board, alpha, beta, isMaximizing);
-
-    bool inCheck = board.inCheck();
-    int extension = inCheck ? 1 : 0;
-    
-    if (depth >= 3 && !inCheck) {
-        board.makeNullMove();
-        int nullScore = 0;
-        if (isMaximizing) {
-            nullScore = minimax(board, depth - 3, beta - 1, beta, false);
-            board.unmakeNullMove();
-            if (timeIsUp.load(std::memory_order_relaxed)) return 0;
-            if (nullScore >= beta) return beta;
+// Higher is searched first: hash move, then promotions and captures (MVV-LVA).
+void orderMoves(const chess::Board& board, chess::Movelist& moves, chess::Move hashMove)
+{
+    for (auto& move : moves) {
+        int score = 0;
+        if (move == hashMove) {
+            score = 30000;
         } else {
-            nullScore = minimax(board, depth - 3, alpha, alpha + 1, true);
-            board.unmakeNullMove();
-            if (timeIsUp.load(std::memory_order_relaxed)) return 0;
-            if (nullScore <= alpha) return alpha;
+            if (move.typeOf() == chess::Move::PROMOTION) score += 900;
+            if (board.isCapture(move))
+                score += 10 * pieceValue(board.at(move.to()).type()) - pieceValue(board.at(move.from()).type());
         }
+        move.setScore(static_cast<std::int16_t>(score));
     }
+    std::sort(moves.begin(), moves.end(),
+              [](const chess::Move& a, const chess::Move& b) { return a.score() > b.score(); });
+}
 
-    chess::Movelist moves;
-    chess::movegen::legalmoves(moves, board);
-    if (moves.empty()){
-        if (inCheck) return isMaximizing ? -20000 : 20000; 
-        return 0;
-    }
+} // namespace
 
-    int originalAlpha = alpha;
-    
-    auto scoreMoveForSort = [&board, ttMove](const chess::Move& move) {
-        if (move == ttMove) return 1000000;
-        return scoreMove(board, move);
+// Lock-free, always-replace hash table shared by all search threads. Each slot
+// stores key ^ data so a torn write from another thread is detected as a miss.
+class TranspositionTable {
+public:
+    struct Entry {
+        int depth = 0;
+        int score = 0;
+        Bound bound = Bound::Exact;
+        chess::Move move{chess::Move::NO_MOVE};
     };
 
-    std::sort(moves.begin(), moves.end(), [&scoreMoveForSort](const chess::Move& a, const chess::Move& b){
-        return scoreMoveForSort(a) > scoreMoveForSort(b);
-    });
+    explicit TranspositionTable(std::size_t slotCount = 1 << 20) : m_slots(slotCount) {}
 
-    int bestScore = isMaximizing ? -99999 : 99999; 
-    chess::Move bestMoveInPos = chess::Move(0);
+    bool probe(std::uint64_t key, Entry& out) const
+    {
+        const Slot& slot = m_slots[key & (m_slots.size() - 1)];
+        const std::uint64_t data = slot.data.load(std::memory_order_relaxed);
+        if ((slot.key.load(std::memory_order_relaxed) ^ data) != key) return false;
 
-    if (isMaximizing) { 
+        out.depth = static_cast<int>(data & 0xFF);
+        out.score = static_cast<std::int16_t>((data >> 8) & 0xFFFF);
+        out.bound = static_cast<Bound>((data >> 24) & 0x3);
+        out.move = chess::Move(static_cast<std::uint16_t>((data >> 26) & 0xFFFF));
+        return true;
+    }
+
+    void store(std::uint64_t key, const Entry& e)
+    {
+        const std::uint64_t data = (static_cast<std::uint64_t>(e.depth) & 0xFF)
+                                 | (static_cast<std::uint64_t>(static_cast<std::uint16_t>(e.score)) << 8)
+                                 | (static_cast<std::uint64_t>(e.bound) << 24)
+                                 | (static_cast<std::uint64_t>(e.move.move()) << 26);
+        Slot& slot = m_slots[key & (m_slots.size() - 1)];
+        slot.data.store(data, std::memory_order_relaxed);
+        slot.key.store(key ^ data, std::memory_order_relaxed);
+    }
+
+    void clear()
+    {
+        for (auto& slot : m_slots) {
+            slot.key.store(0, std::memory_order_relaxed);
+            slot.data.store(0, std::memory_order_relaxed);
+        }
+    }
+
+private:
+    struct Slot {
+        std::atomic<std::uint64_t> key{0};
+        std::atomic<std::uint64_t> data{0};
+    };
+    std::vector<Slot> m_slots; // size must be a power of two
+};
+
+namespace {
+
+// State shared by every thread taking part in one search.
+struct SharedState {
+    TranspositionTable& tt;
+    Clock::time_point start;
+    Clock::time_point deadline;
+    const std::atomic<bool>* stopSignal;
+    std::atomic<bool> stop{false};
+    std::atomic<std::uint64_t> nodes{0};
+};
+
+class SearchThread {
+public:
+    SearchThread(const chess::Board& board, SharedState& shared) : m_board(board), m_shared(shared) {}
+
+    // Iterative deepening. Helper threads (id > 0) search some iterations one ply
+    // deeper so they fill the shared table with different work than the main thread.
+    SearchResult run(int maxDepth, int id, const Searcher::ProgressCallback& onIteration)
+    {
+        SearchResult result;
+        chess::Movelist rootMoves;
+        chess::movegen::legalmoves(rootMoves, m_board);
+        if (rootMoves.empty()) {
+            result.score = m_board.inCheck() ? -kMateScore : 0;
+            if (m_board.sideToMove() == chess::Color::BLACK) result.score = -result.score;
+            return result;
+        }
+        orderMoves(m_board, rootMoves, chess::Move(chess::Move::NO_MOVE));
+        result.bestMove = rootMoves[0]; // fallback if not even depth 1 finishes
+
+        for (int depth = 1; depth <= maxDepth; ++depth) {
+            const int searchDepth = depth + (id % 2);
+            chess::Move bestMove = rootMoves[0];
+            const int score = searchRoot(rootMoves, searchDepth, bestMove);
+            if (m_shared.stop.load(std::memory_order_relaxed)) break;
+
+            // Search the best move first in the next iteration.
+            const auto best = std::find(rootMoves.begin(), rootMoves.end(), bestMove);
+            std::rotate(rootMoves.begin(), best, best + 1);
+
+            result.bestMove = bestMove;
+            result.score = m_board.sideToMove() == chess::Color::WHITE ? score : -score;
+            result.depth = searchDepth;
+            result.nodes = m_shared.nodes.load(std::memory_order_relaxed) + m_pendingNodes;
+            result.elapsedMs = elapsedMs();
+            if (onIteration) onIteration(result);
+
+            if (score >= kMateBound) break; // found a forced mate: no need to look deeper
+        }
+        flushNodes();
+        return result;
+    }
+
+private:
+    int searchRoot(chess::Movelist& moves, int depth, chess::Move& bestMove)
+    {
+        int alpha = -kInfinity;
+        int bestScore = -kInfinity;
         for (const auto& move : moves) {
-            board.makeMove(move);
-            int score = minimax(board, depth - 1 + extension, alpha, beta, false);
-            board.unmakeMove(move); 
-            if (timeIsUp.load(std::memory_order_relaxed)) return 0;
+            m_board.makeMove(move);
+            const int score = -negamax(depth - 1, 1, -kInfinity, -alpha);
+            m_board.unmakeMove(move);
+            if (m_shared.stop.load(std::memory_order_relaxed)) return 0;
+
             if (score > bestScore) {
                 bestScore = score;
-                bestMoveInPos = move;
+                bestMove = move;
+                alpha = std::max(alpha, score);
             }
-            if (score > alpha) alpha = score;
-            if (beta <= alpha) break; 
         }
-    } 
-    else { 
+        return bestScore;
+    }
+
+    int negamax(int depth, int ply, int alpha, int beta)
+    {
+        if (depth <= 0) return quiescence(ply, alpha, beta);
+        if (visitNode()) return 0;
+        if (isDraw()) return 0;
+        if (ply >= kMaxPly) return staticEval();
+
+        const std::uint64_t key = m_board.hash();
+        TranspositionTable::Entry entry;
+        chess::Move hashMove{chess::Move::NO_MOVE};
+        if (m_shared.tt.probe(key, entry)) {
+            hashMove = entry.move;
+            const int score = scoreFromTT(entry.score, ply);
+            if (entry.depth >= depth) {
+                if (entry.bound == Bound::Exact) return score;
+                if (entry.bound == Bound::Lower && score >= beta) return score;
+                if (entry.bound == Bound::Upper && score <= alpha) return score;
+            }
+        }
+
+        const bool inCheck = m_board.inCheck();
+
+        // Null move pruning: if passing still fails high, this node is very likely a cut-node.
+        // Skipped without pieces, where zugzwang makes "passing" unreliable.
+        if (depth > kNullMoveReduction && !inCheck && m_board.hasNonPawnMaterial(m_board.sideToMove())) {
+            m_board.makeNullMove();
+            const int score = -negamax(depth - 1 - kNullMoveReduction, ply + 1, -beta, -beta + 1);
+            m_board.unmakeNullMove();
+            if (m_shared.stop.load(std::memory_order_relaxed)) return 0;
+            if (score >= beta) return beta;
+        }
+
+        chess::Movelist moves;
+        chess::movegen::legalmoves(moves, m_board);
+        if (moves.empty()) return inCheck ? -kMateScore + ply : 0;
+        orderMoves(m_board, moves, hashMove);
+
+        const int originalAlpha = alpha;
+        const int childDepth = depth - 1 + (inCheck ? 1 : 0); // check extension
+        int bestScore = -kInfinity;
+        chess::Move bestMove{chess::Move::NO_MOVE};
+
         for (const auto& move : moves) {
-            board.makeMove(move);
-            int score = minimax(board, depth - 1 + extension, alpha, beta, true);
-            board.unmakeMove(move);
-            if (timeIsUp.load(std::memory_order_relaxed)) return 0;
-            if (score < bestScore) {
+            m_board.makeMove(move);
+            const int score = -negamax(childDepth, ply + 1, -beta, -alpha);
+            m_board.unmakeMove(move);
+            if (m_shared.stop.load(std::memory_order_relaxed)) return 0;
+
+            if (score > bestScore) {
                 bestScore = score;
-                bestMoveInPos = move;
+                bestMove = move;
             }
-            if (score < beta) beta = score;
-            if (beta <= alpha) break; 
+            alpha = std::max(alpha, score);
+            if (alpha >= beta) break;
         }
-    }  
-    
-    HashFlag flag;
-    if (bestScore <= originalAlpha) flag = HASH_ALPHA; 
-    else if (bestScore >= beta) flag = HASH_BETA;  
-    else flag = HASH_EXACT;
-    
-    writeTT(hash, depth, bestScore, flag, bestMoveInPos);
-    
-    return bestScore;
-}
 
-void iterativeDeepening(chess::Board board, int threadID, std::string& outBestMove) {
-    chess::Movelist moves;
-    chess::movegen::legalmoves(moves, board);
-    std::sort(moves.begin(), moves.end(), [&board](const chess::Move& a, const chess::Move& b) {
-        return scoreMove(board, a) > scoreMove(board, b);
-    });
-    
-    chess::Move prevBestMove = chess::Move(0);
-    bool isWhite = (board.sideToMove() == chess::Color::WHITE);  
-    
-    for (int currentDepth = 1; currentDepth <= 64; currentDepth++) {
-        int depthToSearch = currentDepth;
-        if (threadID != 0) {
-            depthToSearch = currentDepth + (threadID % 2); 
-        }
-        
-        int alpha = -99999;
-        int beta = 99999;
-        int bestScore = isWhite ? -99999 : 99999;
-        std::string currentDepthBestMove = "";
-        chess::Move currentBestMoveObj = chess::Move(0);
+        const Bound bound = bestScore <= originalAlpha ? Bound::Upper
+                          : bestScore >= beta          ? Bound::Lower
+                                                       : Bound::Exact;
+        m_shared.tt.store(key, {depth, scoreToTT(bestScore, ply), bound, bestMove});
+        return bestScore;
+    }
 
-        if (prevBestMove != chess::Move(0)) {
-            auto it = std::find(moves.begin(), moves.end(), prevBestMove);
-            if (it != moves.end()) {
-                std::rotate(moves.begin(), it, it + 1);
-            }
+    // Resolve captures (or all evasions when in check) so the static evaluation
+    // is never taken in the middle of an exchange.
+    int quiescence(int ply, int alpha, int beta)
+    {
+        if (visitNode()) return 0;
+        if (isDraw()) return 0;
+        if (ply >= kMaxPly) return staticEval();
+
+        const bool inCheck = m_board.inCheck();
+        int bestScore = -kInfinity;
+        if (!inCheck) {
+            bestScore = staticEval();
+            if (bestScore >= beta) return bestScore;
+            alpha = std::max(alpha, bestScore);
         }
-       
+
+        chess::Movelist moves;
+        if (inCheck) {
+            chess::movegen::legalmoves(moves, m_board);
+            if (moves.empty()) return -kMateScore + ply;
+        } else {
+            chess::movegen::legalmoves<chess::movegen::MoveGenType::CAPTURE>(moves, m_board);
+        }
+        orderMoves(m_board, moves, chess::Move(chess::Move::NO_MOVE));
+
         for (const auto& move : moves) {
-            board.makeMove(move);
-            int score = minimax(board, depthToSearch - 1, alpha, beta, !isWhite);
-            board.unmakeMove(move);
+            m_board.makeMove(move);
+            const int score = -quiescence(ply + 1, -beta, -alpha);
+            m_board.unmakeMove(move);
+            if (m_shared.stop.load(std::memory_order_relaxed)) return 0;
 
-            if (timeIsUp.load(std::memory_order_relaxed)) break;
-            if (isWhite) {
-                if (score > bestScore) { bestScore = score; currentDepthBestMove = chess::uci::moveToUci(move); currentBestMoveObj = move; }
-                if (score > alpha) alpha = score; 
-            } 
-            else {
-                if (score < bestScore) { bestScore = score; currentDepthBestMove = chess::uci::moveToUci(move); currentBestMoveObj = move; }
-                if (score < beta) beta = score; 
-            }
+            bestScore = std::max(bestScore, score);
+            alpha = std::max(alpha, score);
+            if (alpha >= beta) break;
         }
-        
-        if (timeIsUp.load(std::memory_order_relaxed)){
-            if (threadID == 0) {
-                std::cout << "Time's up! Aborting Depth " << depthToSearch << std::endl;
-            }
-            break; 
-        }
-        
-        prevBestMove = currentBestMoveObj;
-        
-        if (threadID == 0) {
-            outBestMove = currentDepthBestMove;
-            std::cout << "Depth " << depthToSearch << " completed. Nodes: " << nodes.load(std::memory_order_relaxed) 
-                      << " | Best Move so far: " << outBestMove << std::endl;
-        }
+        return bestScore;
     }
+
+    // Evaluation from the side to move's point of view.
+    int staticEval() const
+    {
+        const int score = evaluate(m_board);
+        return m_board.sideToMove() == chess::Color::WHITE ? score : -score;
+    }
+
+    bool isDraw() const
+    {
+        return m_board.isRepetition(1) || m_board.isHalfMoveDraw() || m_board.isInsufficientMaterial();
+    }
+
+    // Counts a node and returns true once the search must stop.
+    bool visitNode()
+    {
+        if (++m_pendingNodes == kNodeBatch) {
+            flushNodes();
+            const bool externalStop = m_shared.stopSignal && m_shared.stopSignal->load(std::memory_order_relaxed);
+            if (externalStop || Clock::now() >= m_shared.deadline)
+                m_shared.stop.store(true, std::memory_order_relaxed);
+        }
+        return m_shared.stop.load(std::memory_order_relaxed);
+    }
+
+    void flushNodes()
+    {
+        m_shared.nodes.fetch_add(m_pendingNodes, std::memory_order_relaxed);
+        m_pendingNodes = 0;
+    }
+
+    std::int64_t elapsedMs() const
+    {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - m_shared.start).count();
+    }
+
+    chess::Board m_board;
+    SharedState& m_shared;
+    std::uint64_t m_pendingNodes = 0;
+};
+
+} // namespace
+
+Searcher::Searcher() : m_tt(std::make_unique<TranspositionTable>()) {}
+
+Searcher::~Searcher() = default;
+
+void Searcher::clear() { m_tt->clear(); }
+
+SearchResult Searcher::search(const chess::Board& board, const SearchLimits& limits,
+                              const ProgressCallback& onIteration)
+{
+    const auto start = Clock::now();
+    const auto deadline = limits.timeMs > 0 ? start + std::chrono::milliseconds(limits.timeMs)
+                                            : Clock::time_point::max();
+    SharedState shared{*m_tt, start, deadline, limits.stopSignal};
+
+    int threadCount = limits.threads > 0 ? limits.threads : static_cast<int>(std::thread::hardware_concurrency());
+    threadCount = std::max(threadCount, 1);
+
+    std::vector<std::thread> helpers;
+    for (int id = 1; id < threadCount; ++id) {
+        helpers.emplace_back([&board, &shared, &limits, id] {
+            SearchThread(board, shared).run(limits.maxDepth, id, {});
+        });
+    }
+
+    SearchResult result = SearchThread(board, shared).run(limits.maxDepth, 0, onIteration);
+
+    shared.stop.store(true, std::memory_order_relaxed); // release the helpers
+    for (auto& helper : helpers) helper.join();
+
+    result.nodes = shared.nodes.load(std::memory_order_relaxed);
+    result.elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - start).count();
+    return result;
 }
 
-std::string getBestMoveTime(chess::Board board, int timeLimitMs) {
-    nodes.store(0, std::memory_order_relaxed); 
-    timeIsUp.store(false, std::memory_order_relaxed);
-    limitMs = timeLimitMs;
-    startTime = std::chrono::steady_clock::now();
-    
-    for (auto& entry : transpositionTable) {
-        entry.key.store(0, std::memory_order_relaxed);
-    }
-
-    int numThreads = std::thread::hardware_concurrency();
-    if (numThreads == 0) numThreads = 4;
-    
-    std::string overallBestMove = "";
-    std::vector<std::thread> threads;
-    
-    for (int i = 1; i < numThreads; i++) {
-        threads.emplace_back(iterativeDeepening, board, i, std::ref(overallBestMove));
-    }
-    
-    iterativeDeepening(board, 0, overallBestMove);
-    
-    for (auto& t : threads) {
-        if (t.joinable()) t.join();
-    }
-    
-    return overallBestMove;
-}
-
-float getFutureEvaluation(chess::Board board, int depth) {
-    timeIsUp.store(false, std::memory_order_relaxed);
-    nodes.store(0, std::memory_order_relaxed); 
-    startTime = std::chrono::steady_clock::now();
-    limitMs = 9999999; // Give it infinite time for this quick check
-    bool isWhite = (board.sideToMove() == chess::Color::WHITE);
-    int scoreInCentipawns = minimax(board, depth, -99999, 99999, isWhite);
-    return static_cast<float>(scoreInCentipawns) / 100.0f;
-}}
+} // namespace engine

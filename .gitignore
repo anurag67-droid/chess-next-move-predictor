@@ -1,25 +1,13 @@
-# Prerequisites
-*.d
+# Build output
+build/
+cmake-build-*/
+out/
+compile_commands.json
 
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# IDE configs
+# Editors
 .vscode/
 .idea/
 *.swp
 
-# Build directories
-build/
-bin/
-out/
-
-# Dynamic compile database
-compile_commands.json
+# Created by older versions of the app
+imgui.ini

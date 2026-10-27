@@ -1,13 +1,15 @@
 #include "gui/application.hpp"
-#include <iostream>
+
 #include <cstdlib>
-int main() {
+#include <exception>
+#include <iostream>
+
+int main()
+{
     try {
         gui::Application app;
         app.run();
-    } 
-    catch (const std::exception& e) {
-        // cerr for errors
+    } catch (const std::exception& e) {
         std::cerr << "Fatal error: " << e.what() << '\n';
         return EXIT_FAILURE;
     }
