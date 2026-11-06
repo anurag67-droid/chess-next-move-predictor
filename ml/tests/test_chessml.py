@@ -16,7 +16,7 @@ from chessml.evaluate import evaluate_player
 from chessml.model import PRESETS, MoveNet
 from chessml.pgn_data import game_positions, iter_raw_games, load_player_games, position_key
 from chessml.predictor import MovePredictor
-from chessml import prepare, train
+from chessml import personal, prepare, train
 
 ROOT = Path(__file__).resolve().parents[2]
 ALICE = ROOT / "tests" / "data" / "alice.pgn"
@@ -145,3 +145,14 @@ def test_prepare_and_train_end_to_end(tmp_path):
                        "--batch-size", "32", "--eval-every", "30", "--resume"]) == 0
     predictor = MovePredictor.load(out / "best.pt")
     assert predictor.predict(chess.Board(), 1500, 1500)[0][1] > 0
+
+
+def test_personal_set_leaves_out_the_test_games(tmp_path):
+    out = tmp_path / "alice"
+    assert personal.main([str(ALICE), "--out", str(out), "--test-fraction", "0.34", "--val-fraction", "0.25"]) == 0
+    games = load_player_games(ALICE)
+    train_records, val_records = np.load(out / "train_00000.npy"), np.load(out / "val_00000.npy")
+    # 6 games: the newest 2 are evaluate's test games; of the other 4, the newest is validation.
+    assert sorted(set(train_records["game"].tolist())) == [0, 1, 2]
+    assert sorted(set(val_records["game"].tolist())) == [3]
+    assert len(train_records) == sum(len(games.games[i].positions.records) for i in range(3))
