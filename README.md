@@ -3,7 +3,7 @@
 # Chess Next Move Predictor
 
 A desktop chess board with a built-in C++ engine that analyses every position and predicts the best next move,
-and, from a player's past games, the move that **this player** would most likely play.
+and, from a player's past games and our own neural network, the move that **this player** would most likely play.
 
 [![C++17](https://img.shields.io/badge/C++-17-00599C?logo=c%2B%2B)](https://en.cppreference.com/w/cpp/17)
 [![SFML](https://img.shields.io/badge/Graphics-SFML%203-8CC445)](https://github.com/SFML/SFML)
@@ -119,12 +119,33 @@ Result for 3,000 Lichess games of DrNykterstein (book from the oldest 2,700, tes
 
 *In book* is how often the player had already reached the position in an older game. *Top-1* is how often the book's most frequent move was the move they played. When the book knows a position it is right about 60% of the time, but after the opening almost every position is new. Predicting those is the job of the model in the next steps.
 
+### 4. A neural network for every other position
+
+After the opening the book has almost never seen the position. For those, `ml/` has our own
+neural network, written from scratch in PyTorch, that predicts the move a human of a given rating
+plays: trained on Lichess games, it takes the position, both players' ratings, the time control and
+the clock. See [ml/README.md](ml/README.md) to train it (an NVIDIA GPU makes it practical) and to test it on a player:
+
+```bash
+cd ml
+python -m chessml.evaluate ../players/drnykterstein-lichess.pgn --model runs/medium/best.pt
+```
+
+First results with a small model trained on a CPU (top-1 on each player's newest 10% of games):
+
+| Player | Rating | Book | Model | Book + model |
+|--------|-------:|-----:|------:|-------------:|
+| affections (Lichess) | 1661 | 10.0% | 38.7% | **43.0%** |
+| Shakiro (Lichess) | 1782 | 10.0% | 45.2% | **48.5%** |
+| DrNykterstein (Lichess) | 3186 | 6.5% | 42.2% | **43.3%** |
+| Hikaru (Chess.com) | 3469 | 7.2% | 35.6% | **39.2%** |
+
 ### Roadmap
 
 1. **Per-player opening book** (done): download games, look up past choices, measure.
-2. **Human-like fallback**: a general model of human play at the player's rating (Maia) for positions the book has never seen.
-3. **Personal model**: fine-tune that model on the player's games and check that it beats step 2 on the same held-out games.
-4. **In the app**: run the model with ONNX Runtime and draw its prediction for every position.
+2. **General human model** (done, first version): our own network, trained on Lichess games and conditioned on rating, time control and clock. Next: a bigger model trained on a GPU.
+3. **Personal model**: fine-tune it on one player's games and check that it beats step 2 on the same held-out games.
+4. **In the app**: export the model to ONNX and draw its prediction for every position.
 
 ## How the engine works
 
@@ -156,6 +177,7 @@ include/, src/
               board_renderer.*  board, pieces, arrows and evaluation bar (SFML)
               engine_worker.*   runs the engine on a background thread
               widgets.*, format.*, theme.hpp   UI helpers, text formatting, colours
+ml/           chessml: our move-prediction network (PyTorch): data, model, training, evaluation
 tools/        fetch_games.py: downloads a player's games from Lichess or Chess.com
 tests/        player book tests and a small sample PGN
 players/      downloaded games (not committed)
@@ -166,6 +188,6 @@ third_party/  SFML, Dear ImGui, ImGui-SFML, chess.hpp (submodules)
 ## Limitations
 
 - The engine has no opening book or endgame tablebases.
-- Player prediction only knows positions the player has had before; for anything else the card says so (see the roadmap).
+- The app's player card only knows positions the player has had before; the neural network that covers the rest is not in the app yet (see the roadmap).
 - The evaluation is hand-written and simple, so the engine is far weaker than engines like Stockfish.
 - Move ordering has no killer-move or history heuristics yet, so it searches fewer plies than stronger engines.

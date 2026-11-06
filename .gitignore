@@ -17,3 +17,11 @@ players/
 
 # Python
 __pycache__/
+
+# ML: virtual environment, prepared data and training runs
+ml/.venv/
+ml/data/
+ml/runs/
+*.egg-info/
+.pytest_cache/
+*.log
