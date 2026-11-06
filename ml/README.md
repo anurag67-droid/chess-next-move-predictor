@@ -11,6 +11,7 @@ clock into account, so it can play like a 1200 or like a 2400.
 | `chessml/prepare.py` | Builds a training set from the Lichess database, using every CPU core |
 | `chessml/model.py` | MoveNet: a residual CNN, with the ratings, time control and clock fed to every block (FiLM); move and win/draw/loss heads |
 | `chessml/train.py` | Training on a GPU (mixed precision) or CPU, with checkpoints, validation and `--resume` |
+| `chessml/personal.py` | One player's older games → a fine-tuning set (their moves only, never the test games) |
 | `chessml/evaluate.py` | Book vs model vs both on a player's newest games |
 | `chessml/predict.py` | Ask the model about any position |
 | `chessml/book.py` | The player's opening book (same results as the C++ one in the app) |

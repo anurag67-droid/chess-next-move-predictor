@@ -24,7 +24,7 @@ void Application::drawPanel()
     ImGui::PushFont(m_fonts.title);
     ImGui::TextUnformatted("Next Move Predictor");
     ImGui::PopFont();
-    ImGui::TextDisabled("Alpha-beta search  \xC2\xB7  PeSTO evaluation");
+    ImGui::TextDisabled("Human move prediction  \xC2\xB7  from a player's past games");
     ImGui::Dummy({0.f, 6.f * m_layout.scale});
 
     drawStatusBanner();

@@ -2,50 +2,107 @@
 
 # Chess Next Move Predictor
 
-A desktop chess board with a built-in C++ engine that analyses every position and predicts the best next move,
-and, from a player's past games and our own neural network, the move that **this player** would most likely play.
+Predicts the move **a specific human player** will make next: not the best move, but *their* move.
+It learns from the player's own past games and from a neural network, written from scratch in PyTorch
+and trained on millions of Lichess positions, that plays like a human of any rating.
 
-[![C++17](https://img.shields.io/badge/C++-17-00599C?logo=c%2B%2B)](https://en.cppreference.com/w/cpp/17)
-[![SFML](https://img.shields.io/badge/Graphics-SFML%203-8CC445)](https://github.com/SFML/SFML)
-[![ImGui](https://img.shields.io/badge/UI-Dear%20ImGui-9146FF)](https://github.com/ocornut/imgui)
-[![chess.hpp](https://img.shields.io/badge/Move%20generation-chess.hpp-black)](https://github.com/Disservin/chess-library)
+[![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)](ml/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-CUDA-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org)
+[![Data](https://img.shields.io/badge/Data-Lichess%20database-black?logo=lichess)](https://database.lichess.org)
+[![C++17](https://img.shields.io/badge/App-C++17%20%2B%20SFML-00599C?logo=c%2B%2B)](src/)
 
-<img src="docs/screenshot-game.png" width="860" alt="A Ruy Lopez with 5-minute clocks: the engine's blue arrow and the loaded player's orange arrow both point to Bxc6">
+<img src="docs/screenshot-player.png" width="860" alt="After 1.e4 c5 2.Nf3 d6 3.d4 cxd4 4.Nxd4 Nf6 5.Nc3 the player card shows that DrNykterstein played 5...a6 in 70% of their games">
 
 </div>
 
-## Features
+## What it does
 
-**Board**
-- Drag-and-drop or click-to-move, with legal-move dots, last-move and check highlights
-- Promotion picker, castling, en passant and all draw rules (stalemate, repetition, 50 moves, insufficient material)
-- Flip the board, undo moves and pick a board theme (Green, Wood, Blue, Slate)
-- Optional chess clocks (1 to 30 minutes)
-- Paste a FEN to analyse any position, or copy the current one
+Give it a player's username. It downloads their games from Lichess or Chess.com, and for any
+position it answers: *what will this player play here, and how likely is each move?*
 
-**Engine**
-- Analyses every new position in the background, so the window never freezes
-- Live evaluation bar, score, search depth and a best-move arrow
-- **Play best move** lets the engine move for the side to play (1 to 15 s think time, or stop early with *move now*)
-- Optional auto-reply, so you can play a full game against the engine
+On each player's newest 10% of games, which it never saw, it predicts the exact move played
+**43–49% of the time**, and the move is in its top 3 about **70%** of the time:
 
-**Player prediction**
-- Download any player's games from Lichess or Chess.com with one command
-- Load them in the app to see what that player chose in the current position: their top moves, how often and how they scored, with an orange arrow on the board
-- Works for both colours and through transpositions; filter by bullet, blitz, rapid or classical
-- Click a predicted move to play it, for example to walk through an opponent's repertoire before a game
+| Player | Rating | Positions tested | Opening book | Neural network | Book + network | Top-3 |
+|--------|-------:|-----------------:|-------------:|---------------:|---------------:|------:|
+| affections (Lichess) | 1661 | 8,954 | 9.8% | 38.8% | **43.0%** | 67.4% |
+| Shakiro (Lichess) | 1782 | 11,825 | 10.0% | 45.2% | **48.5%** | 75.2% |
+| DrNykterstein (Lichess) | 3186 | 12,732 | 6.5% | 42.2% | **43.3%** | 71.5% |
+
+*Small first model (0.6M parameters, trained on a CPU). A larger model trained on a GPU and per-player fine-tuning are next; see the [roadmap](#roadmap).*
+
+## How it works
+
+```text
+ player's games ──► opening book ─────────────────────┐
+ (Lichess / Chess.com)  their past choices by position │
+                                                       ├──► probability of every legal move
+ Lichess database ──► MoveNet (PyTorch) ───────────────┘
+ 1M games, 66M positions   position + both ratings + time control + clock
+```
+
+**1. Per-player opening book.** Every position the player has faced, indexed by its Zobrist hash so
+transpositions are found, with what they played and how they scored. It is right about 60% of the
+time when it knows the position, but after move 10 it almost never does: every game soon reaches a
+position the player has not seen.
+
+**2. MoveNet, a human move model.** A residual CNN that reads the board and predicts a probability
+for each of 1858 possible moves. Unlike an engine, it is trained to imitate people, not to win, and
+it is told who is playing: the mover's rating, the opponent's rating, the time control and the clock
+are embedded and modulate every residual block (FiLM). So it can answer "what does a 1200 play in
+blitz with 10 seconds left?" differently from "what does a 2500 play in classical?". A second head
+predicts win/draw/loss.
+
+**3. Combining them.** The book's counts and the network's probabilities are mixed as a Bayesian
+prior: `p(move) = (times played + α · p_network) / (games in position + α)`. Where the player has a
+habit, the book wins; everywhere else, the network fills the gap.
+
+**4. Honest evaluation.** Everything is learned from a player's older games and tested on their
+newest ones, so no game ever helps predict itself or an earlier game, and none of the test players'
+games are in the network's training data.
+
+Details, training commands and design notes: [ml/README.md](ml/README.md).
+
+## Quick start
+
+```bash
+cd ml
+python -m venv .venv && source .venv/bin/activate     # Windows: py -m venv .venv; .venv\Scripts\activate
+pip install torch --index-url https://download.pytorch.org/whl/cu128   # or /whl/cpu
+pip install -r requirements.txt
+
+python ../tools/fetch_games.py lichess DrNykterstein --max 3000
+python -m chessml.evaluate ../players/drnykterstein-lichess.pgn --model models/cpu-small.pt
+python -m chessml.predict --model models/cpu-small.pt --elo 1500
+```
+
+`tools/fetch_games.py` needs only Python and saves games to `players/<user>-<site>.pgn`:
+
+| Option | Meaning |
+|--------|---------|
+| `--max N` | Keep the newest N games |
+| `--speed LIST` | Only `bullet`, `blitz`, `rapid`, `classical`, `correspondence` games |
+| `--since` / `--until DATE` | Date range, `YYYY-MM-DD` |
+| `--rated-only` | Skip casual games (Lichess) |
+| `--token TOKEN` | A Lichess API token, for faster downloads (or set `LICHESS_TOKEN`) |
+
+## Desktop app
+
+A C++ board for exploring a player's repertoire. Load their games in the **Player** card, and for
+every position it lists the moves they chose there, how often and how they scored, with an orange
+arrow for the most likely one. Click a predicted move to play it, for example to walk through an
+opponent's repertoire before a game. It works for both colours and through transpositions, and
+filters by bullet, blitz, rapid or classical.
 
 <p align="center">
-  <img src="docs/screenshot-player.png" width="860" alt="After 1.e4 c5 2.Nf3 d6 3.d4 cxd4 4.Nxd4 Nf6 5.Nc3 the player card shows that DrNykterstein played 5...a6 in 70% of their games">
+  <img src="docs/screenshot-game.png" width="860" alt="A Ruy Lopez: the loaded player's orange arrow and the engine's blue arrow both point to Bxc6">
 </p>
 
-<p align="center">
-  <img src="docs/screenshot-analysis.png" width="860" alt="Flipped board with the Wood theme; the engine has found a winning capture">
-</p>
+For contrast, a blue arrow shows the objectively best move, from the search engine of my separate
+[chess-engine](https://github.com/anurag67-droid/chess-engine) project. When the two arrows
+disagree, the player's habit and the best move part ways.
 
-## Building
-
-You need a C++17 compiler and CMake 3.16+. SFML 3, Dear ImGui, ImGui-SFML and chess.hpp are git submodules.
+Building needs a C++17 compiler and CMake 3.16+ (SFML 3, Dear ImGui and chess.hpp are submodules):
 
 ```bash
 git clone --recursive https://github.com/anurag67-droid/chess-next-move-predictor.git
@@ -55,139 +112,47 @@ cmake --build build -j
 ./build/ChessNextMovePredictor
 ```
 
-If you already cloned without `--recursive`, run `git submodule update --init` first.
+On Linux, building the bundled SFML needs
+`libx11-dev libxrandr-dev libxcursor-dev libxi-dev libudev-dev libgl1-mesa-dev libfreetype-dev libharfbuzz-dev`.
 
-If SFML 3 is installed on your system, CMake uses it. Otherwise it builds the bundled copy, which on Linux needs a few development packages:
+The build also produces `player-book`, a command-line tool that prints a player's repertoire and
+measures the book alone on their newest games (`./build/player-book players/drnykterstein-lichess.pgn`),
+and a test suite (`ctest --test-dir build`).
 
-```bash
-sudo apt install libx11-dev libxrandr-dev libxcursor-dev libxi-dev libudev-dev \
-                 libgl1-mesa-dev libfreetype-dev libharfbuzz-dev
-```
+## Roadmap
 
-Building also produces `player-book`, a command-line tool (see below), and a test suite you can run with `ctest --test-dir build`.
-
-## Predicting a specific player
-
-### 1. Download their games
-
-`tools/fetch_games.py` needs only Python 3.9+ and saves the games to `players/<user>-<site>.pgn`, where the app looks for them:
-
-```bash
-python3 tools/fetch_games.py lichess DrNykterstein --max 3000
-```
-
-```bash
-python3 tools/fetch_games.py chesscom hikaru --speed blitz,rapid --since 2025-01-01
-```
-
-| Option | Meaning |
-|--------|---------|
-| `--max N` | Keep the newest N games |
-| `--speed LIST` | Only `bullet`, `blitz`, `rapid`, `classical`, `correspondence` games |
-| `--since` / `--until DATE` | Date range, `YYYY-MM-DD` |
-| `--rated-only` | Skip casual games (Lichess) |
-| `--token TOKEN` | A Lichess API token, for faster downloads (or set `LICHESS_TOKEN`) |
-| `--out FILE` | Save somewhere else |
-
-Variants such as Chess960 are skipped. Lichess sends about 20 games per second without a token, so a few thousand games take a few minutes.
-
-### 2. Load them in the app
-
-In the **Player** card, pick the file and press **Load**, or paste the path to any PGN file. The app finds the player's name on its own: it is the name that appears in the most games. From then on, for every position the card lists the moves the player chose there, and the orange arrow shows the most frequent one. When the orange and blue arrows point the same way, the player's usual move is also the engine's choice.
-
-A position is looked up by its Zobrist hash, so it is found however the player reached it, and only games where it was the player's turn count.
-
-### 3. Measure how predictable they are
-
-`player-book` prints a player's repertoire and tests the book honestly: it is built from the oldest games and tested on the newest 10%, so no game ever helps predict itself or an older game.
-
-```bash
-./build/player-book players/drnykterstein-lichess.pgn
-./build/player-book players/drnykterstein-lichess.pgn --speed blitz --test-fraction 0.2
-./build/player-book players/drnykterstein-lichess.pgn --fen "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
-```
-
-Result for 3,000 Lichess games of DrNykterstein (book from the oldest 2,700, tested on the newest 300):
-
-```text
-               positions   in book     top-1     top-3  top-1 in book
-  Moves 1-10        2996     46.0%     27.2%     37.2%          59.0%
-  Moves 11-25       4232      0.4%      0.3%      0.3%          61.1%
-  Moves 26+         5504      0.0%      0.0%      0.0%           0.0%
-  All moves        12732     11.0%      6.5%      8.9%          59.1%
-```
-
-*In book* is how often the player had already reached the position in an older game. *Top-1* is how often the book's most frequent move was the move they played. When the book knows a position it is right about 60% of the time, but after the opening almost every position is new. Predicting those is the job of the model in the next steps.
-
-### 4. A neural network for every other position
-
-After the opening the book has almost never seen the position. For those, `ml/` has our own
-neural network, written from scratch in PyTorch, that predicts the move a human of a given rating
-plays: trained on Lichess games, it takes the position, both players' ratings, the time control and
-the clock. See [ml/README.md](ml/README.md) to train it (an NVIDIA GPU makes it practical) and to test it on a player:
-
-```bash
-cd ml
-python -m chessml.evaluate ../players/drnykterstein-lichess.pgn --model runs/medium/best.pt
-```
-
-First results with a small model trained on a CPU (top-1 on each player's newest 10% of games):
-
-| Player | Rating | Book | Model | Book + model |
-|--------|-------:|-----:|------:|-------------:|
-| affections (Lichess) | 1661 | 10.0% | 38.7% | **43.0%** |
-| Shakiro (Lichess) | 1782 | 10.0% | 45.2% | **48.5%** |
-| DrNykterstein (Lichess) | 3186 | 6.5% | 42.2% | **43.3%** |
-| Hikaru (Chess.com) | 3469 | 7.2% | 35.6% | **39.2%** |
-
-### Roadmap
-
-1. **Per-player opening book** (done): download games, look up past choices, measure.
-2. **General human model** (done, first version): our own network, trained on Lichess games and conditioned on rating, time control and clock. Next: a bigger model trained on a GPU.
-3. **Personal model**: fine-tune it on one player's games and check that it beats step 2 on the same held-out games.
-4. **In the app**: export the model to ONNX and draw its prediction for every position.
-
-## How the engine works
-
-The engine (`src/engine/`) is a classical alpha-beta searcher:
-
-| Technique | What it does |
-|-----------|--------------|
-| Iterative deepening | Searches depth 1, 2, 3, ... until time runs out, keeping the best move from the deepest finished search. |
-| Negamax with alpha-beta pruning | Skips branches that cannot change the result. |
-| Transposition table | A lock-free hash table (Zobrist keys) that remembers positions already searched. |
-| Move ordering | Tries the remembered best move first, then captures by MVV-LVA (most valuable victim, least valuable attacker). |
-| Null-move pruning and check extensions | Cuts hopeless lines early and looks deeper when a king is in check. |
-| Quiescence search | Plays out captures at the end of the search, so it never stops in the middle of an exchange. |
-| Lazy SMP | Searches on every CPU core, with all threads sharing the transposition table. |
-| PeSTO evaluation | Tapered middlegame/endgame piece-square tables, plus pawn structure, bishop pair, rook files and king shelter. |
+1. **Per-player opening book** (done).
+2. **General human move model** (done): MoveNet, conditioned on rating, time control and clock. A
+   medium model (3.4M parameters, 1M games) is training on an RTX 4060.
+3. **Personal model**: fine-tune MoveNet on one player's games (`chessml.personal`) and check that it
+   beats the general model on the same held-out games.
+4. **In the app**: export the model to ONNX and draw its prediction for every position, not only
+   the ones in the player's book.
 
 ## Project layout
 
 ```text
-include/, src/
-├── core/     game.*            game state, move history (SAN), FEN loading, game-over rules
-├── engine/   search.*          iterative deepening alpha-beta search
-│             evaluation.*      PeSTO static evaluation
-├── predictor/ player_book.*    a player's past moves by position, speed filter, held-out evaluation
-├── cli/      player_book_main  the player-book command-line tool
-└── gui/      application.*     window, input handling and game flow
-              panel.cpp         side panel, player bars, promotion picker
-              player_worker.*   loads a player's games on a background thread
-              board_renderer.*  board, pieces, arrows and evaluation bar (SFML)
-              engine_worker.*   runs the engine on a background thread
-              widgets.*, format.*, theme.hpp   UI helpers, text formatting, colours
-ml/           chessml: our move-prediction network (PyTorch): data, model, training, evaluation
+ml/chessml/   the move-prediction pipeline (Python, PyTorch)
+              prepare.py   Lichess database → 78-byte position records, on every CPU core
+              model.py     MoveNet: residual CNN with FiLM conditioning, policy and win/draw/loss heads
+              train.py     mixed-precision GPU training, checkpoints, validation, rating ablation
+              personal.py  one player's older games → a fine-tuning set
+              evaluate.py  book vs network vs both on a player's newest games
+              book.py      the per-player opening book
 tools/        fetch_games.py: downloads a player's games from Lichess or Chess.com
-tests/        player book tests and a small sample PGN
-players/      downloaded games (not committed)
-assets/       piece sprites and the Inter font
-third_party/  SFML, Dear ImGui, ImGui-SFML, chess.hpp (submodules)
+src/, include/
+├── predictor/  player_book.*   the opening book in C++ (same results as book.py), speed filter, evaluation
+├── cli/        player-book     command-line repertoire and accuracy report
+├── gui/        the desktop app: board, player card, arrows (SFML + Dear ImGui)
+├── core/       game state, SAN history, FEN, draw rules
+└── engine/     best-move search for the blue arrow (from chess-engine)
+tests/        C++ book tests; ml/tests/ has the Python tests
 ```
 
 ## Limitations
 
-- The engine has no opening book or endgame tablebases.
-- The app's player card only knows positions the player has had before; the neural network that covers the rest is not in the app yet (see the roadmap).
-- The evaluation is hand-written and simple, so the engine is far weaker than engines like Stockfish.
-- Move ordering has no killer-move or history heuristics yet, so it searches fewer plies than stronger engines.
+- The network does not yet use the ratings much: setting everyone to 1500 costs the small model
+  only 0.1 points of accuracy. Tracking this in the training log is how the bigger model is judged.
+- It sees only the current position, not the moves that led to it, so it cannot pick up a
+  player's plans across moves.
+- The app shows the book's prediction; the network's prediction is not in the app yet (step 4).
