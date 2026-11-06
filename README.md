@@ -21,15 +21,18 @@ Give it a player's username. It downloads their games from Lichess or Chess.com,
 position it answers: *what will this player play here, and how likely is each move?*
 
 On each player's newest 10% of games, which it never saw, it predicts the exact move played
-**43–49% of the time**, and the move is in its top 3 about **70%** of the time:
+**46–54% of the time**, and the move is in its top 3 **71–83%** of the time:
 
 | Player | Rating | Positions tested | Opening book | Neural network | Book + network | Top-3 |
 |--------|-------:|-----------------:|-------------:|---------------:|---------------:|------:|
-| affections (Lichess) | 1661 | 8,954 | 9.8% | 38.8% | **43.0%** | 67.4% |
-| Shakiro (Lichess) | 1782 | 11,825 | 10.0% | 45.2% | **48.5%** | 75.2% |
-| DrNykterstein (Lichess) | 3186 | 12,732 | 6.5% | 42.2% | **43.3%** | 71.5% |
+| affections (Lichess) | 1661 | 8,954 | 9.8% | 42.0% | **45.8%** | 70.7% |
+| Shakiro (Lichess) | 1782 | 11,825 | 10.0% | 51.1% | **54.0%** | 81.2% |
+| DrNykterstein (Lichess) | 3186 | 12,732 | 6.5% | 52.4% | **52.9%** | 82.0% |
+| DrNykterstein, personal model | 3186 | 12,732 | 6.5% | 53.8% | **53.9%** | 82.8% |
 
-*Small first model (0.6M parameters, trained on a CPU). A larger model trained on a GPU and per-player fine-tuning are next; see the [roadmap](#roadmap).*
+*Medium model: 3.4M parameters, 1M Lichess games, 150,000 steps (3½ hours on an RTX 4060 laptop GPU).
+The personal model is the same network fine-tuned on DrNykterstein's 2,430 older games; it beats the
+general model on all their test games, in the opening, middlegame and endgame alike.*
 
 ## How it works
 
@@ -122,10 +125,10 @@ and a test suite (`ctest --test-dir build`).
 ## Roadmap
 
 1. **Per-player opening book** (done).
-2. **General human move model** (done): MoveNet, conditioned on rating, time control and clock. A
-   medium model (3.4M parameters, 1M games) is training on an RTX 4060.
-3. **Personal model**: fine-tune MoveNet on one player's games (`chessml.personal`) and check that it
-   beats the general model on the same held-out games.
+2. **General human move model** (done): MoveNet, conditioned on rating, time control and clock;
+   51.0% top-1 on held-out Lichess games.
+3. **Personal model** (first result): fine-tuning MoveNet on one player's games (`chessml.personal`)
+   adds 1 point of top-1 on their newest games. Next: more players, and fewer games per player.
 4. **In the app**: export the model to ONNX and draw its prediction for every position, not only
    the ones in the player's book.
 
@@ -151,8 +154,8 @@ tests/        C++ book tests; ml/tests/ has the Python tests
 
 ## Limitations
 
-- The network does not yet use the ratings much: setting everyone to 1500 costs the small model
-  only 0.1 points of accuracy. Tracking this in the training log is how the bigger model is judged.
+- The network uses the ratings, but modestly: setting everyone to 1500 costs the medium model 0.7
+  points of top-1 (the small model: 0.1). Most of what a move reveals about the player is in the position itself.
 - It sees only the current position, not the moves that led to it, so it cannot pick up a
   player's plans across moves.
 - The app shows the book's prediction; the network's prediction is not in the app yet (step 4).

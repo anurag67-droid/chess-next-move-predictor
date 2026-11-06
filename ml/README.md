@@ -116,8 +116,43 @@ position. The model fills that gap: from 0% to 35–45% for moves 11 onwards.
 
 What this small model has *not* learned yet is to use the ratings: with everyone rated 1500, its
 accuracy drops by only 0.1 points, and it gives a mate-in-one blunder about the same chance at 800
-as at 2400. More data, a bigger model and longer training (the laptop run) should fix that; the
-training log reports the ratings' contribution so you can see whether it does.
+as at 2400.
+
+### Medium model on an RTX 4060 laptop
+
+`medium` (3.4M parameters) on 1M games from October 2026 (`--per-bucket 60000`), 150,000 steps of
+1024 (154M positions, 3h 26m at about 12,000 positions per second). Validation games: **51.0% top-1,
+78.9% top-3**, and the ratings now add **0.7 points** (up from 0.1).
+
+| Player | Model, small → medium | Book + model, small → medium | Top-3, book + model |
+|--------|----------------------:|-----------------------------:|--------------------:|
+| affections | 38.8% → 42.0% | 43.0% → **45.8%** | 67.4% → 70.7% |
+| Shakiro | 45.2% → 51.1% | 48.5% → **54.0%** | 75.2% → 81.2% |
+| DrNykterstein | 42.2% → 52.4% | 43.3% → **52.9%** | 71.5% → 82.0% |
+
+Most of the gain is after the opening, where the book has nothing: DrNykterstein's moves 11+ go
+from 40% to 51.5%.
+
+### A personal model
+
+```powershell
+python -m chessml.personal ..\players\drnykterstein-lichess.pgn --out data\personal-drnykterstein
+python -m chessml.train --data data\personal-drnykterstein --out runs\personal-drnykterstein `
+    --init runs\medium\best.pt --steps 1500 --lr 1e-4 --warmup 100 --eval-every 100
+python -m chessml.evaluate ..\players\drnykterstein-lichess.pgn --model runs\personal-drnykterstein\best.pt
+```
+
+DrNykterstein's 2,430 older games (105k of their moves) to train, the next 270 to choose the
+checkpoint (best at step 1000, after 1½ minutes), and the same newest 300 games as above to test:
+
+| DrNykterstein, newest 300 games | Moves 1–10 | 11–25 | 26+ | All, top-1 | Top-3 | Probability of the move played |
+|---------------------------------|-----------:|------:|----:|-----------:|------:|-------------------------------:|
+| General medium model + book | 57.4% | 51.5% | 51.6% | 52.9% | 82.0% | 0.240 |
+| Personal model + book | **58.6%** | **52.2%** | **52.7%** | **53.9%** | **82.8%** | **0.249** |
+
+One point better everywhere, not only in the opening: the network learns the player's style, not
+just their repertoire. The book now adds almost nothing on top (53.8% → 53.9%), because the personal
+model has learned the player's openings itself.
 
 ## How the model sees a position
 
