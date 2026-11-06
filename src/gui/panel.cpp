@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <iterator>
+#include <string>
 
 namespace gui {
 
@@ -28,8 +29,8 @@ void Application::drawPanel()
 
     drawStatusBanner();
     drawEngineCard();
+    drawPlayerCard();
     drawGameCard();
-    drawMoveList();
 
     ImGui::End();
 }
@@ -119,8 +120,6 @@ void Application::drawEngineCard()
     ImGui::Dummy({0.f, 2.f * s});
     ImGui::Separator();
     ImGui::Dummy({0.f, 2.f * s});
-    rowLabel("Think time");
-    ImGui::SliderInt("##ThinkTime", &m_thinkSeconds, 1, 15, "%d s");
     toggle("Show best-move arrow", &m_showArrow);
     toggle("Engine replies to my moves", &m_autoReply);
 
@@ -136,17 +135,214 @@ void Application::drawEngineCard()
         ImGui::GetWindowDrawList()->AddRectFilled(min, {min.x + (max.x - min.x) * progress, max.y},
                                                   toImU32(color::Accent, 0.35f), ImGui::GetStyle().FrameRounding);
     } else {
+        // "Play best move" with the think time next to it.
+        const float sliderWidth = 92.f * s;
+        const float spacing = ImGui::GetStyle().ItemSpacing.x;
         ImGui::BeginDisabled(isGameOver() || m_pendingPromotion.has_value());
-        if (accentButton("Play best move", buttonSize)) startEngineMove();
+        if (accentButton("Play best move", {ImGui::GetContentRegionAvail().x - sliderWidth - spacing, buttonSize.y}))
+            startEngineMove();
         ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                            {ImGui::GetStyle().FramePadding.x, (buttonSize.y - ImGui::GetFontSize()) / 2.f});
+        ImGui::SetNextItemWidth(sliderWidth);
+        ImGui::SliderInt("##ThinkTime", &m_thinkSeconds, 1, 15, "%d s");
+        ImGui::PopStyleVar();
+        ImGui::SetItemTooltip("How long the engine thinks before playing");
     }
     endCard();
 }
 
+namespace {
+
+constexpr int kPredictionRows = 3; // moves listed in the player card
+
+std::string pluralGames(int n) { return std::to_string(n) + (n == 1 ? " game" : " games"); }
+
+// Speed filter entries: index 0 = all speeds, otherwise 1 + predictor::Speed.
+std::string speedLabel(int index)
+{
+    return index == 0 ? "All speeds" : predictor::speedName(static_cast<predictor::Speed>(index - 1));
+}
+
+predictor::SpeedMask speedMask(int index)
+{
+    return index == 0 ? predictor::kAllSpeeds : predictor::speedBit(static_cast<predictor::Speed>(index - 1));
+}
+
+} // namespace
+
+void Application::drawPlayerCard()
+{
+    beginCard("##Player");
+    cardTitle(m_fonts.bold, "PLAYER");
+    if (m_book) {
+        // "Change" sits at the right end of the title row.
+        const char* label = "Change";
+        const float width = ImGui::CalcTextSize(label).x + 2.f * ImGui::GetStyle().FramePadding.x;
+        ImGui::SameLine(ImGui::GetContentRegionMax().x - width);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {ImGui::GetStyle().FramePadding.x, 0.f});
+        if (ImGui::SmallButton(label)) {
+            m_book.reset();
+            m_playerFiles = findPlayerFiles();
+        }
+        ImGui::PopStyleVar();
+    }
+    if (m_book) drawPlayerPrediction();
+    else drawPlayerPicker();
+    endCard();
+}
+
+void Application::drawPlayerPicker()
+{
+    if (m_playerWorker.busy()) {
+        ImGui::TextDisabled("Reading %s ...", m_playerWorker.loadingPath().filename().string().c_str());
+        return;
+    }
+
+    const float spacing = ImGui::GetStyle().ItemSpacing.x;
+    if (!m_playerFiles.empty()) {
+        m_playerFileIndex = std::clamp(m_playerFileIndex, 0, static_cast<int>(m_playerFiles.size()) - 1);
+        const float loadWidth = ImGui::CalcTextSize("Load").x + 4.f * ImGui::GetStyle().FramePadding.x;
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - loadWidth - spacing);
+        const std::string preview = m_playerFiles[m_playerFileIndex].stem().string();
+        if (ImGui::BeginCombo("##PlayerFile", preview.c_str())) {
+            for (int i = 0; i < static_cast<int>(m_playerFiles.size()); ++i) {
+                const std::string name = m_playerFiles[i].stem().string();
+                if (ImGui::Selectable(name.c_str(), i == m_playerFileIndex)) m_playerFileIndex = i;
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        if (accentButton("Load", {loadWidth, 0.f})) loadPlayer(m_playerFiles[m_playerFileIndex]);
+    }
+
+    ImGui::SetNextItemWidth(-1.f);
+    if (ImGui::InputTextWithHint("##PgnPath", m_playerFiles.empty() ? "Path to a player's PGN, then Enter"
+                                                                     : "Or a PGN file path, then Enter",
+                                 m_pgnPathInput.data(), m_pgnPathInput.size(), ImGuiInputTextFlags_EnterReturnsTrue))
+    {
+        // Accept paths pasted with quotes around them (e.g. Windows' "Copy as path").
+        std::string path = m_pgnPathInput.data();
+        const auto first = path.find_first_not_of(" \t\"'");
+        const auto last = path.find_last_not_of(" \t\"'");
+        if (first != std::string::npos) loadPlayer(path.substr(first, last - first + 1));
+    }
+
+    ImGui::PushTextWrapPos(0.f);
+    if (!m_playerError.empty()) ImGui::TextColored(toImVec4(color::Danger), "%s", m_playerError.c_str());
+    if (m_playerFiles.empty())
+        ImGui::TextDisabled("Download someone's games with tools/fetch_games.py to see what they would play.");
+    ImGui::PopTextWrapPos();
+}
+
+void Application::drawPlayerPrediction()
+{
+    const float s = m_layout.scale;
+    const predictor::PlayerBook& book = *m_book;
+
+    // Name on the left; speed filter, with the number of games, on the right.
+    const auto speedEntry = [&](int index) {
+        return speedLabel(index) + "  (" + std::to_string(book.gameCount(speedMask(index))) + ")";
+    };
+    float speedWidth = 0.f;
+    for (int i = 0; i <= predictor::kSpeedCount; ++i)
+        speedWidth = std::max(speedWidth, ImGui::CalcTextSize(speedEntry(i).c_str()).x);
+    speedWidth += ImGui::GetFrameHeight() + 2.f * ImGui::GetStyle().FramePadding.x;
+
+    ImGui::AlignTextToFramePadding();
+    ImGui::PushFont(m_fonts.bold);
+    ImGui::TextColored(toImVec4(color::Player), "%s", book.player().c_str());
+    ImGui::PopFont();
+    ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetContentRegionMax().x - speedWidth));
+    ImGui::SetNextItemWidth(speedWidth);
+    if (ImGui::BeginCombo("##Speed", speedEntry(m_bookSpeed).c_str())) {
+        for (int i = 0; i <= predictor::kSpeedCount; ++i) {
+            if (i > 0 && book.gameCount(speedMask(i)) == 0) continue; // only speeds the player has games in
+            if (ImGui::Selectable(speedEntry(i).c_str(), i == m_bookSpeed)) m_bookSpeed = i;
+        }
+        ImGui::EndCombo();
+    }
+
+    if (m_prediction.empty()) {
+        ImGui::PushTextWrapPos(0.f);
+        if (m_bookSpeed == 0) ImGui::TextDisabled("%s never reached this position.", book.player().c_str());
+        else
+            ImGui::TextDisabled("%s never reached this position in %s games.", book.player().c_str(),
+                                speedLabel(m_bookSpeed).c_str());
+        ImGui::PopTextWrapPos();
+    } else {
+        // One row per move: SAN, a bar showing how often they chose it, and the number of games.
+        // Clicking a row plays the move.
+        constexpr ImGuiTableFlags kFlags = ImGuiTableFlags_SizingFixedFit;
+        if (ImGui::BeginTable("##Prediction", 3, kFlags)) {
+            ImGui::TableSetupColumn("Move", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("Qxh8=Q+").x);
+            ImGui::TableSetupColumn("Share", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Games", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("0000 games").x);
+
+            std::optional<chess::Move> clicked;
+            const int rows = std::min(kPredictionRows, static_cast<int>(m_prediction.moves.size()));
+            for (int i = 0; i < rows; ++i) {
+                const predictor::MoveStat& stat = m_prediction.moves[i];
+                const std::string san = chess::uci::moveToSan(m_game.board(), stat.move);
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::PushID(i);
+                if (i == 0) ImGui::PushFont(m_fonts.bold);
+                ImGui::PushStyleColor(ImGuiCol_Text, toImVec4(i == 0 ? color::Player : color::Text));
+                if (ImGui::Selectable(san.c_str(), false,
+                                      ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap))
+                    clicked = stat.move;
+                ImGui::PopStyleColor();
+                if (i == 0) ImGui::PopFont();
+                if (ImGui::IsItemHovered()) {
+                    const auto& last = book.games()[stat.lastGame];
+                    ImGui::SetTooltip("%s: %d won, %d drawn, %d lost (score %.0f%%)\nLast played %s against %s%s",
+                                      san.c_str(), stat.wins, stat.draws, stat.losses, 100. * stat.score(),
+                                      last.date.c_str(),
+                                      (last.playerColor == chess::Color::WHITE ? last.black : last.white).c_str(),
+                                      canMovePieces() ? "\nClick to play it" : "");
+                }
+                ImGui::PopID();
+
+                // Frequency bar with the percentage on top.
+                ImGui::TableNextColumn();
+                ImDrawList* draw = ImGui::GetWindowDrawList();
+                const ImVec2 pos = ImGui::GetCursorScreenPos();
+                const float width = ImGui::GetContentRegionAvail().x;
+                const float height = ImGui::GetTextLineHeight();
+                const float barTop = pos.y + height * 0.15f;
+                const ImVec2 barMax(pos.x + width, pos.y + height * 0.85f);
+                draw->AddRectFilled({pos.x, barTop}, barMax, toImU32(color::Border), 4.f * s);
+                draw->AddRectFilled({pos.x, barTop}, {pos.x + width * static_cast<float>(stat.share), barMax.y},
+                                    toImU32(color::Player, i == 0 ? 0.9f : 0.45f), 4.f * s);
+                char percent[8];
+                std::snprintf(percent, sizeof(percent), "%.0f%%", 100. * stat.share);
+                const float textWidth = ImGui::CalcTextSize(percent).x;
+                draw->AddText({barMax.x - textWidth - 6.f * s, pos.y}, toImU32(color::Text), percent);
+                ImGui::Dummy({width, height});
+
+                ImGui::TableNextColumn();
+                ImGui::TextDisabled("%s", pluralGames(stat.games).c_str());
+            }
+            ImGui::EndTable();
+            if (clicked && canMovePieces()) playMove(*clicked, false);
+        }
+    }
+    toggle("Show player's move arrow", &m_showPlayerArrow);
+    if (m_prediction.moves.size() > kPredictionRows) {
+        char more[32];
+        std::snprintf(more, sizeof(more), "+%zu more", m_prediction.moves.size() - kPredictionRows);
+        ImGui::SameLine(ImGui::GetContentRegionMax().x - ImGui::CalcTextSize(more).x);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%s", more);
+    }
+}
+
 void Application::drawGameCard()
 {
-    beginCard("##Game");
-    cardTitle(m_fonts.bold, "GAME");
+    // Fills the rest of the panel: game buttons, then the move list or the game settings.
+    beginCard("##Game", std::max(ImGui::GetContentRegionAvail().y, 120.f * m_layout.scale));
 
     const float spacing = ImGui::GetStyle().ItemSpacing.x;
     const ImVec2 size((ImGui::GetContentRegionAvail().x - 2.f * spacing) / 3.f, 0.f);
@@ -158,6 +354,23 @@ void Application::drawGameCard()
     ImGui::SameLine();
     if (ImGui::Button("Flip board", size)) m_flipped = !m_flipped;
 
+    if (ImGui::BeginTabBar("##GameTabs")) {
+        if (ImGui::BeginTabItem("Moves")) {
+            drawMoveList();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Settings")) {
+            drawGameSettings();
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+    endCard();
+}
+
+void Application::drawGameSettings()
+{
+    const float spacing = ImGui::GetStyle().ItemSpacing.x;
     rowLabel("Time control");
     if (ImGui::BeginCombo("##TimeControl", kTimeControls[m_timeControl].name)) {
         for (int i = 0; i < static_cast<int>(std::size(kTimeControls)); ++i) {
@@ -184,18 +397,13 @@ void Application::drawGameCard()
     ImGui::SameLine();
     if (ImGui::Button("Copy FEN")) ImGui::SetClipboardText(m_game.fen().c_str());
     if (!m_fenError.empty()) ImGui::TextColored(toImVec4(color::Danger), "%s", m_fenError.c_str());
-    endCard();
 }
 
 void Application::drawMoveList()
 {
-    beginCard("##Moves", std::max(ImGui::GetContentRegionAvail().y, 80.f));
-    cardTitle(m_fonts.bold, "MOVES");
-
     const auto& history = m_game.history();
     if (history.empty()) {
         ImGui::TextDisabled("Drag or click a piece to start.");
-        endCard();
         return;
     }
 
@@ -227,7 +435,6 @@ void Application::drawMoveList()
         if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 1.f) ImGui::SetScrollHereY(1.f);
         ImGui::EndTable();
     }
-    endCard();
 }
 
 void Application::drawPlayerBar(const char* id, sf::FloatRect rect, chess::Color side)

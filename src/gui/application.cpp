@@ -34,6 +34,7 @@ Application::Application()
     resetClocks();
     updateLayout();
     startAnalysis();
+    m_playerFiles = findPlayerFiles();
 }
 
 Application::~Application()
@@ -288,6 +289,44 @@ void Application::pollEngine()
 }
 
 // ---------------------------------------------------------------------------
+// Player prediction
+
+void Application::loadPlayer(const std::filesystem::path& path)
+{
+    if (path.empty()) return;
+    m_playerError.clear();
+    m_playerWorker.load(path);
+}
+
+void Application::pollPlayer()
+{
+    auto loaded = m_playerWorker.takeLoaded();
+    if (!loaded) return;
+    if (!loaded->book) {
+        m_playerError = loaded->error;
+        return;
+    }
+    m_book = std::move(loaded->book);
+    m_bookPath = loaded->path;
+    m_bookSpeed = 0;
+    m_pgnPathInput.fill('\0');
+    m_playerFiles = findPlayerFiles(); // pick up files downloaded since the last look
+}
+
+void Application::refreshPrediction()
+{
+    const std::uint64_t key = m_game.board().hash();
+    if (m_book.get() == m_predictionBook && key == m_predictionKey && m_bookSpeed == m_predictionSpeed) return;
+    m_predictionBook = m_book.get();
+    m_predictionKey = key;
+    m_predictionSpeed = m_bookSpeed;
+
+    const predictor::SpeedMask speeds = m_bookSpeed == 0 ? predictor::kAllSpeeds
+                                      : predictor::speedBit(static_cast<predictor::Speed>(m_bookSpeed - 1));
+    m_prediction = m_book ? m_book->lookup(m_game.board(), speeds) : predictor::BookLookup{};
+}
+
+// ---------------------------------------------------------------------------
 // Frame
 
 void Application::updateLayout()
@@ -353,6 +392,8 @@ void Application::update(float dt)
     ImGui::SFML::Update(m_window, sf::seconds(dt));
 
     pollEngine();
+    pollPlayer();
+    refreshPrediction();
     tickClock(dt);
 
     float target = m_evalShare;
@@ -392,15 +433,21 @@ BoardScene Application::buildScene() const
         }
     }
 
+    const bool showArrows = !isGameOver() && !m_pendingPromotion;
     const bool hasSuggestion = m_analysis.depth > 0 && m_analysis.bestMove.move() != chess::Move::NO_MOVE;
-    if (m_showArrow && hasSuggestion && !isGameOver() && !m_pendingPromotion)
+    if (m_showArrow && hasSuggestion && showArrows)
         scene.arrow = MoveSquares{m_analysis.bestMove.from(), core::targetSquare(m_analysis.bestMove)};
+    if (m_showPlayerArrow && !m_prediction.empty() && showArrows) {
+        const chess::Move move = m_prediction.moves.front().move;
+        scene.playerArrow = MoveSquares{move.from(), core::targetSquare(move)};
+    }
     return scene;
 }
 
 void Application::render()
 {
     m_window.clear(color::Background);
+    refreshPrediction(); // a move made while drawing the panel (e.g. a promotion) changed the position
 
     m_renderer.setFlipped(m_flipped);
     m_renderer.setTheme(kBoardThemes[m_boardTheme]);

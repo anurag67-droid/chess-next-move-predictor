@@ -82,7 +82,10 @@ void BoardRenderer::draw(sf::RenderTarget& target, const BoardScene& scene) cons
     if (scene.checkedKing) drawCheck(target, *scene.checkedKing);
     drawMoveHints(target, scene);
     drawPieces(target, scene);
-    if (scene.arrow) drawArrow(target, *scene.arrow);
+    // The player's arrow goes underneath and a little wider: when both suggest the same move,
+    // the engine's arrow shows with an orange outline.
+    if (scene.playerArrow) drawArrow(target, *scene.playerArrow, color::PlayerArrow, 1.45f);
+    if (scene.arrow) drawArrow(target, *scene.arrow, color::Arrow);
 
     if (scene.dragFrom) {
         const chess::Piece piece = scene.board->at(*scene.dragFrom);
@@ -211,7 +214,7 @@ void BoardRenderer::drawPieces(sf::RenderTarget& target, const BoardScene& scene
     }
 }
 
-void BoardRenderer::drawArrow(sf::RenderTarget& target, MoveSquares move) const
+void BoardRenderer::drawArrow(sf::RenderTarget& target, MoveSquares move, sf::Color fill, float widthScale) const
 {
     const float size = squareSize();
     const sf::Vector2f half(size / 2.f, size / 2.f);
@@ -223,16 +226,16 @@ void BoardRenderer::drawArrow(sf::RenderTarget& target, MoveSquares move) const
 
     const sf::Vector2f dir = delta / length;
     const sf::Vector2f normal(-dir.y, dir.x);
-    const float shaftHalf = size * 0.09f;
-    const float headHalf = size * 0.24f;
-    const float headLength = size * 0.42f;
-    const sf::Vector2f tip = end - dir * (size * 0.12f);
+    const float shaftHalf = size * 0.09f * widthScale;
+    const float headHalf = size * 0.24f * widthScale;
+    const float headLength = size * 0.42f * (1.f + (widthScale - 1.f) * 0.5f);
+    const sf::Vector2f tip = end - dir * (size * 0.12f / widthScale);
     const sf::Vector2f base = tip - dir * headLength;
 
     target.draw(polygon({start + normal * shaftHalf, base + normal * shaftHalf,
                          base - normal * shaftHalf, start - normal * shaftHalf},
-                        color::Arrow));
-    target.draw(polygon({base + normal * headHalf, tip, base - normal * headHalf}, color::Arrow));
+                        fill));
+    target.draw(polygon({base + normal * headHalf, tip, base - normal * headHalf}, fill));
 }
 
 void BoardRenderer::drawEvalBar(sf::RenderTarget& target, sf::FloatRect rect, float whiteShare,

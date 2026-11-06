@@ -25,7 +25,8 @@ struct BoardScene {
     std::optional<chess::Square> checkedKing;
     std::optional<chess::Square> dragFrom; // piece being dragged, drawn at dragPosition
     sf::Vector2f dragPosition;
-    std::optional<MoveSquares> arrow; // engine's suggested move
+    std::optional<MoveSquares> arrow;       // engine's suggested move
+    std::optional<MoveSquares> playerArrow; // the loaded player's most frequent move here
 };
 
 class BoardRenderer {
@@ -54,7 +55,8 @@ private:
     void drawCheck(sf::RenderTarget& target, chess::Square king) const;
     void drawMoveHints(sf::RenderTarget& target, const BoardScene& scene) const;
     void drawPieces(sf::RenderTarget& target, const BoardScene& scene) const;
-    void drawArrow(sf::RenderTarget& target, MoveSquares move) const;
+    // widthScale > 1 draws a fatter arrow, so one drawn under another of the same move shows as an outline.
+    void drawArrow(sf::RenderTarget& target, MoveSquares move, sf::Color fill, float widthScale = 1.f) const;
 
     sf::Texture m_pieceTexture;
     sf::Font m_font;

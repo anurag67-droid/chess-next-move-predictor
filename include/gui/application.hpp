@@ -3,13 +3,18 @@
 #include "core/game.hpp"
 #include "gui/board_renderer.hpp"
 #include "gui/engine_worker.hpp"
+#include "gui/player_worker.hpp"
+#include "predictor/player_book.hpp"
 
 #include <SFML/Graphics.hpp>
 #include <imgui.h>
 
 #include <array>
+#include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace gui {
 
@@ -80,13 +85,22 @@ private:
     void pollEngine();
     bool engineIsThinking() const;
 
+    // Player prediction (what the loaded player played in this position)
+    void loadPlayer(const std::filesystem::path& path);
+    void pollPlayer();
+    void refreshPrediction();
+
     // Interface (layout and fonts in application.cpp, drawing in panel.cpp)
     void updateLayout();
     void loadFonts(float scale);
     void drawPanel();
     void drawStatusBanner();
     void drawEngineCard();
+    void drawPlayerCard();
+    void drawPlayerPicker();
+    void drawPlayerPrediction();
     void drawGameCard();
+    void drawGameSettings();
     void drawMoveList();
     void drawPlayerBar(const char* id, sf::FloatRect rect, chess::Color side);
     void drawPromotionPicker();
@@ -116,6 +130,21 @@ private:
     int m_thinkSeconds = 5;
     bool m_showArrow = true;
     bool m_autoReply = false;
+
+    // Player prediction
+    PlayerWorker m_playerWorker;
+    std::shared_ptr<const predictor::PlayerBook> m_book;
+    std::filesystem::path m_bookPath;
+    int m_bookSpeed = 0; // 0 = all speeds, otherwise 1 + predictor::Speed
+    predictor::BookLookup m_prediction;
+    std::uint64_t m_predictionKey = 0;
+    int m_predictionSpeed = -1;
+    const predictor::PlayerBook* m_predictionBook = nullptr;
+    bool m_showPlayerArrow = true;
+    std::vector<std::filesystem::path> m_playerFiles;
+    int m_playerFileIndex = 0;
+    std::array<char, 512> m_pgnPathInput{};
+    std::string m_playerError;
 
     // Clocks
     int m_timeControl = 0;

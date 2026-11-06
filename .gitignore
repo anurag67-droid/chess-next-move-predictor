@@ -11,3 +11,9 @@ compile_commands.json
 
 # Created by older versions of the app
 imgui.ini
+
+# Downloaded games (tools/fetch_games.py)
+players/
+
+# Python
+__pycache__/

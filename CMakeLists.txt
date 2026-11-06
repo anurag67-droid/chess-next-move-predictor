@@ -11,6 +11,31 @@ endif()
 
 set(THIRD_PARTY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 
+# Chess logic and the player book: no graphics, shared by the app, the command-line tool and the tests.
+add_library(predictor_core STATIC
+    src/core/game.cpp
+    src/predictor/player_book.cpp
+)
+target_include_directories(predictor_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${THIRD_PARTY_DIR}/chess.hpp/include
+)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(predictor_core PRIVATE $<$<CONFIG:Release>:-O3>)
+endif()
+
+# player-book: summarise a player's games and test how well their past moves predict new ones.
+add_executable(player-book src/cli/player_book_main.cpp)
+target_link_libraries(player-book PRIVATE predictor_core)
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(player_book_test tests/player_book_test.cpp)
+    target_link_libraries(player_book_test PRIVATE predictor_core)
+    target_compile_definitions(player_book_test PRIVATE TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
+    add_test(NAME player_book COMMAND player_book_test)
+endif()
+
 # SFML 3: use an installed copy if there is one, otherwise build the submodule.
 find_package(SFML 3 COMPONENTS Graphics Window System QUIET)
 if(NOT SFML_FOUND)
@@ -35,7 +60,6 @@ set(IMGUI_SOURCES
 
 add_executable(${PROJECT_NAME}
     src/main.cpp
-    src/core/game.cpp
     src/engine/evaluation.cpp
     src/engine/search.cpp
     src/gui/application.cpp
@@ -43,18 +67,16 @@ add_executable(${PROJECT_NAME}
     src/gui/engine_worker.cpp
     src/gui/format.cpp
     src/gui/panel.cpp
+    src/gui/player_worker.cpp
     src/gui/widgets.cpp
     ${IMGUI_SOURCES}
 )
 
-target_include_directories(${PROJECT_NAME} PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${THIRD_PARTY_DIR}/chess.hpp/include
-)
 target_include_directories(${PROJECT_NAME} SYSTEM PRIVATE ${IMGUI_DIR} ${IMGUI_SFML_DIR})
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE
     CHESS_ASSETS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
+    CHESS_PLAYERS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/players"
 )
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -65,6 +87,7 @@ elseif(MSVC)
 endif()
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
+    predictor_core
     SFML::Graphics
     SFML::Window
     SFML::System

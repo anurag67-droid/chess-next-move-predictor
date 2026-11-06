@@ -32,6 +32,8 @@ inline const sf::Color AccentActive{96, 146, 64};
 inline const sf::Color Danger{224, 76, 76};
 inline const sf::Color Warning{232, 170, 60};
 inline const sf::Color Arrow{82, 148, 232, 210};
+inline const sf::Color PlayerArrow{240, 146, 52, 215};
+inline const sf::Color Player{240, 146, 52};
 inline const sf::Color Highlight{255, 235, 59, 110};
 inline const sf::Color EvalWhite{240, 240, 236};
 inline const sf::Color EvalBlack{48, 50, 54};

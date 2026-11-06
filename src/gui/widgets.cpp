@@ -23,6 +23,9 @@ void applyStyle(float scale)
     style.WindowBorderSize = 0.f;
     style.ChildBorderSize = 1.f;
     style.FrameBorderSize = 0.f;
+    style.TabRounding = 6.f;
+    style.TabBarBorderSize = 1.f;
+    style.TabBarOverlineSize = 0.f;
     style.ScaleAllSizes(scale);
 
     ImVec4* c = style.Colors;
@@ -50,6 +53,11 @@ void applyStyle(float scale)
     c[ImGuiCol_ScrollbarGrab] = toImVec4(color::Border);
     c[ImGuiCol_ScrollbarGrabHovered] = toImVec4(color::TextMuted);
     c[ImGuiCol_ScrollbarGrabActive] = toImVec4(color::TextMuted);
+    c[ImGuiCol_Tab] = toImVec4(color::Card);
+    c[ImGuiCol_TabHovered] = toImVec4(color::Border);
+    c[ImGuiCol_TabSelected] = toImVec4(color::CardHover);
+    c[ImGuiCol_TabDimmed] = toImVec4(color::Card);
+    c[ImGuiCol_TabDimmedSelected] = toImVec4(color::CardHover);
     c[ImGuiCol_TableRowBg] = toImVec4(color::Card, 0.f);
     c[ImGuiCol_TableRowBgAlt] = toImVec4(color::CardHover, 0.6f);
     ImGui::GetStyle() = style;
