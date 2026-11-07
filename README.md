@@ -11,7 +11,7 @@ and trained on millions of Lichess positions, that plays like a human of any rat
 [![Data](https://img.shields.io/badge/Data-Lichess%20database-black?logo=lichess)](https://database.lichess.org)
 [![C++17](https://img.shields.io/badge/App-C++17%20%2B%20SFML-00599C?logo=c%2B%2B)](src/)
 
-<img src="docs/screenshot-player.png" width="860" alt="After 1.e4 c5 2.Nf3 d6 3.d4 cxd4 4.Nxd4 Nf6 5.Nc3 the player card shows that DrNykterstein played 5...a6 in 70% of their games">
+<img src="docs/screenshot-player.png" width="860" alt="An English Attack after 11.g4, a position DrNykterstein has never had: the network predicts 11...b5 at 47%, while the engine's blue arrow prefers Rc8">
 
 </div>
 
@@ -103,7 +103,7 @@ runtime): 7 ms per position on a laptop CPU, with the same probabilities as PyTo
 which `ctest` checks.
 
 <p align="center">
-  <img src="docs/screenshot-game.png" width="860" alt="A Ruy Lopez: the loaded player's orange arrow and the engine's blue arrow both point to Bxc6">
+  <img src="docs/screenshot-game.png" width="860" alt="A Ruy Lopez that DrNykterstein has reached in 12 games: they chose Bxc6 7 times and Ba4 5 times, and the engine's blue arrow also points to Bxc6">
 </p>
 
 For contrast, a blue arrow shows the objectively best move, from the search engine of my separate
