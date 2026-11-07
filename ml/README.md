@@ -14,6 +14,7 @@ clock into account, so it can play like a 1200 or like a 2400.
 | `chessml/personal.py` | One player's older games → a fine-tuning set (their moves only, never the test games) |
 | `chessml/evaluate.py` | Book vs model vs both on a player's newest games |
 | `chessml/predict.py` | Ask the model about any position |
+| `chessml/export.py` | A trained model → the `.movenet` file the C++ app runs (batch norm folded in) |
 | `chessml/book.py` | The player's opening book (same results as the C++ one in the app) |
 
 ## Setup
@@ -89,12 +90,24 @@ for the book alone, the model alone, and both combined.
 python -m chessml.predict --model runs\medium\best.pt --elo 1500 --fen "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
 ```
 
-## Results so far
-
-The model from this run is included as `models/cpu-small.pt` (2.4 MB), so you can try it before training your own:
+## 4. Use it in the app
 
 ```powershell
-python -m chessml.predict --model models/cpu-small.pt --elo 1500
+python -m chessml.export runs\medium\best.pt --out models\medium.movenet
+```
+
+The desktop app loads `ml/models/medium.movenet` at start and runs the network in C++
+(`src/predictor/move_net.cpp`): no Python, PyTorch or ONNX runtime needed. `--reference FILE` also
+writes PyTorch's predictions for a few test positions; `move_net_test <model> <reference>` checks that
+the C++ network gives the same ones (it does, to within 10⁻⁶).
+
+## Results so far
+
+Both trained models are included, so you can try them before training your own: `models/medium.pt`
+(13.6 MB, the better one) and `models/cpu-small.pt` (2.4 MB). Each has its training log next to it.
+
+```powershell
+python -m chessml.predict --model models/medium.pt --elo 1500
 ```
 
 A first `small` model trained on this cloud session's CPU: 241,720 Lichess games from October 2026
@@ -121,7 +134,8 @@ as at 2400.
 ### Medium model on an RTX 4060 laptop
 
 `medium` (3.4M parameters) on 1M games from October 2026 (`--per-bucket 60000`), 150,000 steps of
-1024 (154M positions, 3h 26m at about 12,000 positions per second). Validation games: **51.0% top-1,
+1024 (154M positions, 3h 26m at about 12,000 positions per second); `models/medium.pt` is its best
+checkpoint (step 138,000). Validation games: **51.0% top-1,
 78.9% top-3**, and the ratings now add **0.7 points** (up from 0.1).
 
 | Player | Model, small → medium | Book + model, small → medium | Top-3, book + model |
@@ -142,17 +156,24 @@ python -m chessml.train --data data\personal-drnykterstein --out runs\personal-d
 python -m chessml.evaluate ..\players\drnykterstein-lichess.pgn --model runs\personal-drnykterstein\best.pt
 ```
 
-DrNykterstein's 2,430 older games (105k of their moves) to train, the next 270 to choose the
-checkpoint (best at step 1000, after 1½ minutes), and the same newest 300 games as above to test:
+For each player: their 2,430 older games to train (73k–105k of their moves), the next 270 to choose
+the checkpoint, and the same newest 300 games as above to test. 1,500 steps at learning rate 1e-4,
+about two minutes each.
 
-| DrNykterstein, newest 300 games | Moves 1–10 | 11–25 | 26+ | All, top-1 | Top-3 | Probability of the move played |
-|---------------------------------|-----------:|------:|----:|-----------:|------:|-------------------------------:|
-| General medium model + book | 57.4% | 51.5% | 51.6% | 52.9% | 82.0% | 0.240 |
-| Personal model + book | **58.6%** | **52.2%** | **52.7%** | **53.9%** | **82.8%** | **0.249** |
+| Newest 300 games, top-1 with the book | Moves 1–10 | 11–25 | 26+ | All | Top-3 | Probability of the move played |
+|---------------------------------------|-----------:|------:|----:|----:|------:|-------------------------------:|
+| affections, general model | 57.4% | 41.1% | 38.3% | 45.8% | 70.7% | 0.155 |
+| affections, personal model | **60.9%** | **44.1%** | **41.0%** | **48.9%** | **73.7%** | **0.179** |
+| Shakiro, general model | 66.0% | 49.9% | 49.9% | 54.0% | 81.2% | 0.244 |
+| Shakiro, personal model | **70.1%** | **52.0%** | **51.7%** | **56.4%** | **83.7%** | **0.267** |
+| DrNykterstein, general model | 57.4% | 51.5% | 51.6% | 52.9% | 82.0% | 0.240 |
+| DrNykterstein, personal model | **58.6%** | **52.2%** | **52.7%** | **53.9%** | **82.8%** | **0.249** |
 
-One point better everywhere, not only in the opening: the network learns the player's style, not
-just their repertoire. The book now adds almost nothing on top (53.8% → 53.9%), because the personal
-model has learned the player's openings itself.
+Better for every player and in every phase of the game, not only the opening: the network learns
+the player's style, not just their repertoire. The gain is largest for the club players (+3.1 and
++2.4 points) and smallest for the 3186 (+1.0).
+The book now adds almost nothing on top (DrNykterstein: 53.8% → 53.9%), because the personal model
+has learned the player's openings itself.
 
 ## How the model sees a position
 

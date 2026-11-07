@@ -177,6 +177,25 @@ void testRepetitionCountsOnce()
     CHECK(found.moves.size() == 1 && found.moves[0].games == 1);
 }
 
+void testRatings()
+{
+    // Ann's ratings: 1500 (blitz), 1600 (blitz), 1700 (rapid), and one unrated blitz game.
+    std::istringstream pgn(
+        "[White \"Ann\"]\n[Black \"Ben\"]\n[WhiteElo \"1500\"]\n[BlackElo \"1400\"]\n[TimeControl \"180+0\"]\n\n1. e4 1-0\n\n"
+        "[White \"Cat\"]\n[Black \"Ann\"]\n[WhiteElo \"2000\"]\n[BlackElo \"1600\"]\n[TimeControl \"300+0\"]\n\n1. d4 0-1\n\n"
+        "[White \"Ann\"]\n[Black \"Dan\"]\n[WhiteElo \"1700\"]\n[BlackElo \"1800\"]\n[TimeControl \"600+0\"]\n\n1. c4 1-0\n\n"
+        "[White \"Ann\"]\n[Black \"Eve\"]\n[WhiteElo \"?\"]\n[TimeControl \"180+0\"]\n\n1. Nf3 1-0\n");
+    const auto book = PlayerBook::fromPgn(pgn, "Ann");
+    CHECK(book.games().size() == 4);
+    CHECK(book.medianElo() == 1600);
+    CHECK(book.medianElo(speedBit(Speed::Blitz)) == 1600); // 1500 and 1600: the upper middle
+    CHECK(book.medianElo(speedBit(Speed::Rapid)) == 1700);
+    CHECK(book.medianElo(speedBit(Speed::Bullet)) == 0);
+    CHECK(book.medianOpponentElo(speedBit(Speed::Rapid)) == 1800);
+    CHECK(book.mostPlayedSpeed() == Speed::Blitz);
+    CHECK(book.mostPlayedSpeed(speedBit(Speed::Rapid)) == Speed::Rapid);
+}
+
 } // namespace
 
 int main()
@@ -188,6 +207,7 @@ int main()
     testEvaluation(book);
     testExplicitPlayerAndErrors();
     testRepetitionCountsOnce();
+    testRatings();
 
     if (g_failures) {
         std::fprintf(stderr, "%d check(s) failed\n", g_failures);

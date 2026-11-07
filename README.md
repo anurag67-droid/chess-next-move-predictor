@@ -21,18 +21,17 @@ Give it a player's username. It downloads their games from Lichess or Chess.com,
 position it answers: *what will this player play here, and how likely is each move?*
 
 On each player's newest 10% of games, which it never saw, it predicts the exact move played
-**46–54% of the time**, and the move is in its top 3 **71–83%** of the time:
+**49–56% of the time**, and the move is in its top 3 **74–84%** of the time:
 
-| Player | Rating | Positions tested | Opening book | Neural network | Book + network | Top-3 |
-|--------|-------:|-----------------:|-------------:|---------------:|---------------:|------:|
-| affections (Lichess) | 1661 | 8,954 | 9.8% | 42.0% | **45.8%** | 70.7% |
-| Shakiro (Lichess) | 1782 | 11,825 | 10.0% | 51.1% | **54.0%** | 81.2% |
-| DrNykterstein (Lichess) | 3186 | 12,732 | 6.5% | 52.4% | **52.9%** | 82.0% |
-| DrNykterstein, personal model | 3186 | 12,732 | 6.5% | 53.8% | **53.9%** | 82.8% |
+| Player | Rating | Positions tested | Opening book alone | General network + book | Personal network + book | Top-3 |
+|--------|-------:|-----------------:|-------------------:|-----------------------:|------------------------:|------:|
+| affections (Lichess) | 1661 | 8,954 | 9.8% | 45.8% | **48.9%** | 73.7% |
+| Shakiro (Lichess) | 1782 | 11,825 | 10.0% | 54.0% | **56.4%** | 83.7% |
+| DrNykterstein (Lichess) | 3186 | 12,732 | 6.5% | 52.9% | **53.9%** | 82.8% |
 
-*Medium model: 3.4M parameters, 1M Lichess games, 150,000 steps (3½ hours on an RTX 4060 laptop GPU).
-The personal model is the same network fine-tuned on DrNykterstein's 2,430 older games; it beats the
-general model on all their test games, in the opening, middlegame and endgame alike.*
+*General network: 3.4M parameters, trained on 1M Lichess games (3½ hours on an RTX 4060 laptop GPU).
+Personal network: the same network fine-tuned for two minutes on the player's 2,430 older games. It
+beats the general one for all three players, by 1 to 3 points, in the opening, middlegame and endgame alike.*
 
 ## How it works
 
@@ -75,8 +74,8 @@ pip install torch --index-url https://download.pytorch.org/whl/cu128   # or /whl
 pip install -r requirements.txt
 
 python ../tools/fetch_games.py lichess DrNykterstein --max 3000
-python -m chessml.evaluate ../players/drnykterstein-lichess.pgn --model models/cpu-small.pt
-python -m chessml.predict --model models/cpu-small.pt --elo 1500
+python -m chessml.evaluate ../players/drnykterstein-lichess.pgn --model models/medium.pt
+python -m chessml.predict --model models/medium.pt --elo 1500
 ```
 
 `tools/fetch_games.py` needs only Python and saves games to `players/<user>-<site>.pgn`:
@@ -91,11 +90,17 @@ python -m chessml.predict --model models/cpu-small.pt --elo 1500
 
 ## Desktop app
 
-A C++ board for exploring a player's repertoire. Load their games in the **Player** card, and for
-every position it lists the moves they chose there, how often and how they scored, with an orange
-arrow for the most likely one. Click a predicted move to play it, for example to walk through an
-opponent's repertoire before a game. It works for both colours and through transpositions, and
-filters by bullet, blitz, rapid or classical.
+A C++ board for exploring what a player would play. Load their games in the **Player** card, and for
+every position it lists their most likely moves, with an orange arrow for the first. Where they have
+a habit, it shows how often they chose each move and how they scored; where they have never been, the
+network predicts for a player of their rating and usual time control. Click a predicted move to play
+it, for example to walk through an opponent's repertoire before a game. It works for both colours and
+through transpositions, and filters by bullet, blitz, rapid or classical. Without a player loaded, a
+rating slider shows what anyone of that rating would play.
+
+The app runs MoveNet itself, in plain C++ (`src/predictor/move_net.cpp`, no PyTorch or ONNX
+runtime): 7 ms per position on a laptop CPU, with the same probabilities as PyTorch to within 10⁻⁶,
+which `ctest` checks.
 
 <p align="center">
   <img src="docs/screenshot-game.png" width="860" alt="A Ruy Lopez: the loaded player's orange arrow and the engine's blue arrow both point to Bxc6">
@@ -127,10 +132,11 @@ and a test suite (`ctest --test-dir build`).
 1. **Per-player opening book** (done).
 2. **General human move model** (done): MoveNet, conditioned on rating, time control and clock;
    51.0% top-1 on held-out Lichess games.
-3. **Personal model** (first result): fine-tuning MoveNet on one player's games (`chessml.personal`)
-   adds 1 point of top-1 on their newest games. Next: more players, and fewer games per player.
-4. **In the app**: export the model to ONNX and draw its prediction for every position, not only
-   the ones in the player's book.
+3. **Personal model** (done): fine-tuning MoveNet on one player's games (`chessml.personal`) adds 1
+   to 3 points of top-1 on their newest games. Next: how few games it needs.
+4. **In the app** (done): the network, exported with `chessml.export`, runs in C++ and predicts every
+   position, not only the ones in the player's book.
+5. **Next**: personal networks in the app, and the moves that led to the position as input.
 
 ## Project layout
 
@@ -141,10 +147,13 @@ ml/chessml/   the move-prediction pipeline (Python, PyTorch)
               train.py     mixed-precision GPU training, checkpoints, validation, rating ablation
               personal.py  one player's older games → a fine-tuning set
               evaluate.py  book vs network vs both on a player's newest games
+              export.py    a trained network → the file the app reads
               book.py      the per-player opening book
+ml/models/    the trained networks: medium.pt (PyTorch) and medium.movenet (for the app)
 tools/        fetch_games.py: downloads a player's games from Lichess or Chess.com
 src/, include/
-├── predictor/  player_book.*   the opening book in C++ (same results as book.py), speed filter, evaluation
+├── predictor/  move_net.*      MoveNet inference in plain C++, and the book + network combination
+│               player_book.*   the opening book in C++ (same results as book.py), speed filter, evaluation
 ├── cli/        player-book     command-line repertoire and accuracy report
 ├── gui/        the desktop app: board, player card, arrows (SFML + Dear ImGui)
 ├── core/       game state, SAN history, FEN, draw rules
@@ -158,4 +167,5 @@ tests/        C++ book tests; ml/tests/ has the Python tests
   points of top-1 (the small model: 0.1). Most of what a move reveals about the player is in the position itself.
 - It sees only the current position, not the moves that led to it, so it cannot pick up a
   player's plans across moves.
-- The app shows the book's prediction; the network's prediction is not in the app yet (step 4).
+- The app uses the general network, told the player's rating; personal networks work in Python
+  but are not in the app yet.

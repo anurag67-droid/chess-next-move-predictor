@@ -15,6 +15,7 @@ set(THIRD_PARTY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 add_library(predictor_core STATIC
     src/core/game.cpp
     src/predictor/player_book.cpp
+    src/predictor/move_net.cpp
 )
 target_include_directories(predictor_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -34,6 +35,11 @@ if(BUILD_TESTING)
     target_link_libraries(player_book_test PRIVATE predictor_core)
     target_compile_definitions(player_book_test PRIVATE TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
     add_test(NAME player_book COMMAND player_book_test)
+
+    add_executable(move_net_test tests/move_net_test.cpp)
+    target_link_libraries(move_net_test PRIVATE predictor_core)
+    target_compile_definitions(move_net_test PRIVATE TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
+    add_test(NAME move_net COMMAND move_net_test)
 endif()
 
 # SFML 3: use an installed copy if there is one, otherwise build the submodule.
@@ -77,6 +83,7 @@ target_include_directories(${PROJECT_NAME} SYSTEM PRIVATE ${IMGUI_DIR} ${IMGUI_S
 target_compile_definitions(${PROJECT_NAME} PRIVATE
     CHESS_ASSETS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
     CHESS_PLAYERS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/players"
+    CHESS_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/ml/models"
 )
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")

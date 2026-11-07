@@ -4,6 +4,7 @@
 #include "gui/board_renderer.hpp"
 #include "gui/engine_worker.hpp"
 #include "gui/player_worker.hpp"
+#include "predictor/move_net.hpp"
 #include "predictor/player_book.hpp"
 
 #include <SFML/Graphics.hpp>
@@ -85,10 +86,20 @@ private:
     void pollEngine();
     bool engineIsThinking() const;
 
-    // Player prediction (what the loaded player played in this position)
+    // Player prediction: what the loaded player played in this position, and what the network
+    // expects from a player like them
+    struct PredictionRow {
+        chess::Move move;
+        double probability = 0.;
+        const predictor::MoveStat* stat = nullptr; // their games with this move, if any
+        double network = -1.;                      // the network alone, -1 without a network
+    };
+    void loadNetwork();
     void loadPlayer(const std::filesystem::path& path);
     void pollPlayer();
     void refreshPrediction();
+    predictor::NetContext netContext() const;
+    std::vector<PredictionRow> predictionRows() const;
 
     // Interface (layout and fonts in application.cpp, drawing in panel.cpp)
     void updateLayout();
@@ -99,6 +110,8 @@ private:
     void drawPlayerCard();
     void drawPlayerPicker();
     void drawPlayerPrediction();
+    void drawNetworkPrediction();
+    void drawPredictionRows(const std::vector<PredictionRow>& rows);
     void drawGameCard();
     void drawGameSettings();
     void drawMoveList();
@@ -140,6 +153,13 @@ private:
     std::uint64_t m_predictionKey = 0;
     int m_predictionSpeed = -1;
     const predictor::PlayerBook* m_predictionBook = nullptr;
+    std::optional<predictor::MoveNet> m_net; // empty if no exported model was found
+    std::string m_netError;
+    int m_netElo = 1500; // the rating asked about when no player is loaded
+    int m_predictionElo = -1;
+    predictor::NetContext m_netContext;
+    std::vector<predictor::MoveProbability> m_netPrediction; // the network alone, most likely first
+    std::vector<predictor::MoveProbability> m_combined;      // book and network together, most likely first
     bool m_showPlayerArrow = true;
     std::vector<std::filesystem::path> m_playerFiles;
     int m_playerFileIndex = 0;

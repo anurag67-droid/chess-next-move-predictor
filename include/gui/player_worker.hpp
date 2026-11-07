@@ -41,5 +41,8 @@ private:
 
 // PGN files in the players folder that tools/fetch_games.py downloads into.
 std::vector<std::filesystem::path> findPlayerFiles();
+// The network exported to ml/models by `python -m chessml.export`: medium.movenet if it is there,
+// otherwise any .movenet file. Empty if there is none.
+std::filesystem::path findModelFile();
 
 } // namespace gui

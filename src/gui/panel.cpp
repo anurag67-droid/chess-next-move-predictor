@@ -188,9 +188,38 @@ void Application::drawPlayerCard()
         }
         ImGui::PopStyleVar();
     }
-    if (m_book) drawPlayerPrediction();
-    else drawPlayerPicker();
+    if (m_book) {
+        drawPlayerPrediction();
+    } else {
+        drawPlayerPicker();
+        drawNetworkPrediction();
+    }
     endCard();
+}
+
+void Application::drawNetworkPrediction()
+{
+    // Without a player: what the network expects from anyone of a chosen rating.
+    const float s = m_layout.scale;
+    ImGui::Dummy({0.f, 2.f * s});
+    ImGui::Separator();
+    ImGui::Dummy({0.f, 2.f * s});
+    if (!m_net) {
+        ImGui::PushTextWrapPos(0.f);
+        ImGui::TextDisabled("%s", m_netError.c_str());
+        ImGui::PopTextWrapPos();
+        return;
+    }
+
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Any player rated");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+    if (ImGui::SliderInt("##NetElo", &m_netElo, 600, 3000, "%d  \xC2\xB7  blitz"))
+        m_netElo = (m_netElo + 50) / 100 * 100; // the network knows ratings in 100-point bands
+    ImGui::SetItemTooltip("The neural network's prediction for a player of this rating");
+    drawPredictionRows(predictionRows());
+    toggle("Show predicted move arrow", &m_showPlayerArrow);
 }
 
 void Application::drawPlayerPicker()
@@ -238,7 +267,6 @@ void Application::drawPlayerPicker()
 
 void Application::drawPlayerPrediction()
 {
-    const float s = m_layout.scale;
     const predictor::PlayerBook& book = *m_book;
 
     // Name on the left; speed filter, with the number of games, on the right.
@@ -264,7 +292,7 @@ void Application::drawPlayerPrediction()
         ImGui::EndCombo();
     }
 
-    if (m_prediction.empty()) {
+    if (m_prediction.empty() && !m_net) {
         ImGui::PushTextWrapPos(0.f);
         if (m_bookSpeed == 0) ImGui::TextDisabled("%s never reached this position.", book.player().c_str());
         else
@@ -272,71 +300,97 @@ void Application::drawPlayerPrediction()
                                 speedLabel(m_bookSpeed).c_str());
         ImGui::PopTextWrapPos();
     } else {
-        // One row per move: SAN, a bar showing how often they chose it, and the number of games.
-        // Clicking a row plays the move.
-        constexpr ImGuiTableFlags kFlags = ImGuiTableFlags_SizingFixedFit;
-        if (ImGui::BeginTable("##Prediction", 3, kFlags)) {
-            ImGui::TableSetupColumn("Move", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("Qxh8=Q+").x);
-            ImGui::TableSetupColumn("Share", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Games", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("0000 games").x);
-
-            std::optional<chess::Move> clicked;
-            const int rows = std::min(kPredictionRows, static_cast<int>(m_prediction.moves.size()));
-            for (int i = 0; i < rows; ++i) {
-                const predictor::MoveStat& stat = m_prediction.moves[i];
-                const std::string san = chess::uci::moveToSan(m_game.board(), stat.move);
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-                ImGui::PushID(i);
-                if (i == 0) ImGui::PushFont(m_fonts.bold);
-                ImGui::PushStyleColor(ImGuiCol_Text, toImVec4(i == 0 ? color::Player : color::Text));
-                if (ImGui::Selectable(san.c_str(), false,
-                                      ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap))
-                    clicked = stat.move;
-                ImGui::PopStyleColor();
-                if (i == 0) ImGui::PopFont();
-                if (ImGui::IsItemHovered()) {
-                    const auto& last = book.games()[stat.lastGame];
-                    ImGui::SetTooltip("%s: %d won, %d drawn, %d lost (score %.0f%%)\nLast played %s against %s%s",
-                                      san.c_str(), stat.wins, stat.draws, stat.losses, 100. * stat.score(),
-                                      last.date.c_str(),
-                                      (last.playerColor == chess::Color::WHITE ? last.black : last.white).c_str(),
-                                      canMovePieces() ? "\nClick to play it" : "");
-                }
-                ImGui::PopID();
-
-                // Frequency bar with the percentage on top.
-                ImGui::TableNextColumn();
-                ImDrawList* draw = ImGui::GetWindowDrawList();
-                const ImVec2 pos = ImGui::GetCursorScreenPos();
-                const float width = ImGui::GetContentRegionAvail().x;
-                const float height = ImGui::GetTextLineHeight();
-                const float barTop = pos.y + height * 0.15f;
-                const ImVec2 barMax(pos.x + width, pos.y + height * 0.85f);
-                draw->AddRectFilled({pos.x, barTop}, barMax, toImU32(color::Border), 4.f * s);
-                draw->AddRectFilled({pos.x, barTop}, {pos.x + width * static_cast<float>(stat.share), barMax.y},
-                                    toImU32(color::Player, i == 0 ? 0.9f : 0.45f), 4.f * s);
-                char percent[8];
-                std::snprintf(percent, sizeof(percent), "%.0f%%", 100. * stat.share);
-                const float textWidth = ImGui::CalcTextSize(percent).x;
-                draw->AddText({barMax.x - textWidth - 6.f * s, pos.y}, toImU32(color::Text), percent);
-                ImGui::Dummy({width, height});
-
-                ImGui::TableNextColumn();
-                ImGui::TextDisabled("%s", pluralGames(stat.games).c_str());
-            }
-            ImGui::EndTable();
-            if (clicked && canMovePieces()) playMove(*clicked, false);
-        }
+        drawPredictionRows(predictionRows());
+    }
+    if (m_net && !m_netPrediction.empty()) {
+        // Where the prediction comes from: their games, the network, or both.
+        const std::string source = m_prediction.empty() ? "Not in their games"
+                                                        : "In " + pluralGames(m_prediction.total) + " of theirs";
+        ImGui::TextDisabled("%s  \xC2\xB7  network as a %d, %s", source.c_str(), m_netContext.elo,
+                            predictor::speedName(m_netContext.speed));
     }
     toggle("Show player's move arrow", &m_showPlayerArrow);
-    if (m_prediction.moves.size() > kPredictionRows) {
+    if (!m_net && m_prediction.moves.size() > kPredictionRows) {
         char more[32];
         std::snprintf(more, sizeof(more), "+%zu more", m_prediction.moves.size() - kPredictionRows);
         ImGui::SameLine(ImGui::GetContentRegionMax().x - ImGui::CalcTextSize(more).x);
         ImGui::AlignTextToFramePadding();
         ImGui::TextDisabled("%s", more);
     }
+}
+
+void Application::drawPredictionRows(const std::vector<PredictionRow>& rows)
+{
+    // One row per move: SAN, a bar with its probability, and how often the player chose it.
+    // Clicking a row plays the move.
+    const float s = m_layout.scale;
+    constexpr ImGuiTableFlags kFlags = ImGuiTableFlags_SizingFixedFit;
+    const bool gamesColumn = m_book != nullptr; // without a player there are no games to count
+    if (!ImGui::BeginTable("##Prediction", gamesColumn ? 3 : 2, kFlags)) return;
+    ImGui::TableSetupColumn("Move", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("Qxh8=Q+").x);
+    ImGui::TableSetupColumn("Share", ImGuiTableColumnFlags_WidthStretch);
+    if (gamesColumn)
+        ImGui::TableSetupColumn("Games", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("0000 games").x);
+
+    std::optional<chess::Move> clicked;
+    const int count = std::min(kPredictionRows, static_cast<int>(rows.size()));
+    for (int i = 0; i < count; ++i) {
+        const PredictionRow& row = rows[i];
+        const std::string san = chess::uci::moveToSan(m_game.board(), row.move);
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::PushID(i);
+        if (i == 0) ImGui::PushFont(m_fonts.bold);
+        ImGui::PushStyleColor(ImGuiCol_Text, toImVec4(i == 0 ? color::Player : color::Text));
+        if (ImGui::Selectable(san.c_str(), false, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap))
+            clicked = row.move;
+        ImGui::PopStyleColor();
+        if (i == 0) ImGui::PopFont();
+        if (ImGui::IsItemHovered()) {
+            std::string tip;
+            char line[256];
+            if (row.stat && m_book) {
+                const predictor::MoveStat& stat = *row.stat;
+                const auto& last = m_book->games()[stat.lastGame];
+                std::snprintf(line, sizeof(line), "%s: %d won, %d drawn, %d lost (score %.0f%%)\nLast played %s against %s",
+                              san.c_str(), stat.wins, stat.draws, stat.losses, 100. * stat.score(), last.date.c_str(),
+                              (last.playerColor == chess::Color::WHITE ? last.black : last.white).c_str());
+                tip = line;
+            } else if (m_book) {
+                tip = m_book->player() + " never played " + san + " here";
+            }
+            if (row.network >= 0.) {
+                std::snprintf(line, sizeof(line), "%sNetwork alone: %.0f%% for a player rated %d", tip.empty() ? "" : "\n",
+                              100. * row.network, m_netContext.elo);
+                tip += line;
+            }
+            if (canMovePieces()) tip += "\nClick to play it";
+            ImGui::SetTooltip("%s", tip.c_str());
+        }
+        ImGui::PopID();
+
+        // Probability bar with the percentage on top.
+        ImGui::TableNextColumn();
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        const ImVec2 pos = ImGui::GetCursorScreenPos();
+        const float width = ImGui::GetContentRegionAvail().x;
+        const float height = ImGui::GetTextLineHeight();
+        const float barTop = pos.y + height * 0.15f;
+        const ImVec2 barMax(pos.x + width, pos.y + height * 0.85f);
+        draw->AddRectFilled({pos.x, barTop}, barMax, toImU32(color::Border), 4.f * s);
+        draw->AddRectFilled({pos.x, barTop}, {pos.x + width * static_cast<float>(row.probability), barMax.y},
+                            toImU32(color::Player, i == 0 ? 0.9f : 0.45f), 4.f * s);
+        char percent[8];
+        std::snprintf(percent, sizeof(percent), "%.0f%%", 100. * row.probability);
+        const float textWidth = ImGui::CalcTextSize(percent).x;
+        draw->AddText({barMax.x - textWidth - 6.f * s, pos.y}, toImU32(color::Text), percent);
+        ImGui::Dummy({width, height});
+
+        if (gamesColumn && ImGui::TableNextColumn() && row.stat)
+            ImGui::TextDisabled("%s", pluralGames(row.stat->games).c_str());
+    }
+    ImGui::EndTable();
+    if (clicked && canMovePieces()) playMove(*clicked, false);
 }
 
 void Application::drawGameCard()

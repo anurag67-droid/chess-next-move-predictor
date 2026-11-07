@@ -56,4 +56,18 @@ std::vector<std::filesystem::path> findPlayerFiles()
     return files;
 }
 
+std::filesystem::path findModelFile()
+{
+    std::filesystem::path any;
+    for (const char* dir : {CHESS_MODELS_DIR, "ml/models", "../ml/models", "models"}) {
+        std::error_code ec;
+        for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+            if (!entry.is_regular_file(ec) || entry.path().extension() != ".movenet") continue;
+            if (entry.path().filename() == "medium.movenet") return entry.path();
+            if (any.empty()) any = entry.path();
+        }
+    }
+    return any;
+}
+
 } // namespace gui

@@ -16,7 +16,7 @@ from chessml.evaluate import evaluate_player
 from chessml.model import PRESETS, MoveNet
 from chessml.pgn_data import game_positions, iter_raw_games, load_player_games, position_key
 from chessml.predictor import MovePredictor
-from chessml import personal, prepare, train
+from chessml import export, personal, prepare, train
 
 ROOT = Path(__file__).resolve().parents[2]
 ALICE = ROOT / "tests" / "data" / "alice.pgn"
@@ -156,3 +156,22 @@ def test_personal_set_leaves_out_the_test_games(tmp_path):
     assert sorted(set(train_records["game"].tolist())) == [0, 1, 2]
     assert sorted(set(val_records["game"].tolist())) == [3]
     assert len(train_records) == sum(len(games.games[i].positions.records) for i in range(3))
+
+
+def test_export_writes_the_whole_network(tmp_path):
+    # The C++ side is checked against PyTorch in tests/move_net_test.cpp; here, the file's layout.
+    model = MoveNet(PRESETS["tiny"])
+    path = tmp_path / "tiny.movenet"
+    export.export(model, path)
+    data = path.read_bytes()
+    assert data[:8] == export.MAGIC
+    header = np.frombuffer(data[8:44], dtype="<i4").tolist()
+    c, blocks, d = model.config.channels, model.config.blocks, model.config.context_dim
+    assert header == [c, blocks, d, E.ELO_BUCKETS, len(E.SPEEDS), E.CLOCK_BUCKETS, E.NUM_PLANES, E.MOVE_PLANES, E.NUM_MOVES]
+    # Every parameter except the value head's and batch norm's (folded into the convolutions' biases).
+    value = sum(p.numel() for p in model.value.parameters())
+    norms = sum(p.numel() for m in model.modules() if isinstance(m, torch.nn.BatchNorm2d) for p in m.parameters())
+    norms -= sum(p.numel() for p in model.value[1].parameters())  # already counted in the value head
+    folded_biases = c * (1 + 2 * blocks + 1)  # stem, two per block, policy
+    floats = sum(p.numel() for p in model.parameters()) - value - norms + folded_biases
+    assert len(data) == 44 + 4 * 4 * E.NUM_MOVES + 4 * floats

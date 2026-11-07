@@ -29,6 +29,7 @@ int parseInt(std::string_view s)
 // A game as read from the file, before we know whose games these are.
 struct RawGame {
     std::string white, black, result, date, time, timeControl, variant, fen, site;
+    int whiteElo = 0, blackElo = 0;
     std::vector<std::string> moves; // SAN
 };
 
@@ -47,6 +48,8 @@ public:
         else if (key == "Date" && g.date.empty()) g.date = value;
         else if (key == "UTCTime") g.time = value;
         else if (key == "TimeControl") g.timeControl = value;
+        else if (key == "WhiteElo") g.whiteElo = std::max(0, parseInt(value));
+        else if (key == "BlackElo") g.blackElo = std::max(0, parseInt(value));
         else if (key == "Variant") g.variant = value;
         else if (key == "FEN") g.fen = value;
         else if (key == "Site" || key == "Link") {
@@ -193,6 +196,8 @@ PlayerBook PlayerBook::fromPgn(std::istream& pgn, const std::string& player)
         info.speed = speedFromTimeControl(raw.timeControl);
         info.playerColor = isWhite ? chess::Color::WHITE : chess::Color::BLACK;
         info.outcome = outcomeFor(raw.result, info.playerColor);
+        info.playerElo = isWhite ? raw.whiteElo : raw.blackElo;
+        info.opponentElo = isWhite ? raw.blackElo : raw.whiteElo;
         book.m_player = isWhite ? raw.white : raw.black; // ends as the newest game's spelling
 
         const auto gameIndex = static_cast<std::uint32_t>(book.m_games.size());
@@ -233,6 +238,42 @@ int PlayerBook::gameCount(SpeedMask speeds) const
 {
     return static_cast<int>(std::count_if(m_games.begin(), m_games.end(),
                                           [&](const GameInfo& g) { return speeds & speedBit(g.speed); }));
+}
+
+namespace {
+
+int median(std::vector<int> values)
+{
+    if (values.empty()) return 0;
+    const auto middle = values.begin() + static_cast<std::ptrdiff_t>(values.size() / 2);
+    std::nth_element(values.begin(), middle, values.end());
+    return *middle;
+}
+
+} // namespace
+
+int PlayerBook::medianElo(SpeedMask speeds) const
+{
+    std::vector<int> elos;
+    for (const auto& g : m_games)
+        if ((speeds & speedBit(g.speed)) && g.playerElo > 0) elos.push_back(g.playerElo);
+    return median(std::move(elos));
+}
+
+int PlayerBook::medianOpponentElo(SpeedMask speeds) const
+{
+    std::vector<int> elos;
+    for (const auto& g : m_games)
+        if ((speeds & speedBit(g.speed)) && g.opponentElo > 0) elos.push_back(g.opponentElo);
+    return median(std::move(elos));
+}
+
+Speed PlayerBook::mostPlayedSpeed(SpeedMask speeds) const
+{
+    int counts[kSpeedCount] = {};
+    for (const auto& g : m_games)
+        if (speeds & speedBit(g.speed)) ++counts[static_cast<int>(g.speed)];
+    return static_cast<Speed>(std::max_element(std::begin(counts), std::end(counts)) - std::begin(counts));
 }
 
 BookLookup PlayerBook::lookupKey(std::uint64_t key, SpeedMask speeds, int beforeGame) const

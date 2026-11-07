@@ -37,6 +37,8 @@ struct GameInfo {
     Speed speed = Speed::Unknown;
     chess::Color playerColor = chess::Color::WHITE;
     Outcome outcome = Outcome::Unknown;
+    int playerElo = 0;   // 0 when the PGN has no rating
+    int opponentElo = 0;
 };
 
 // How often the player chose one move in one position.
@@ -80,6 +82,11 @@ public:
     const std::vector<GameInfo>& games() const { return m_games; }
     const LoadStats& stats() const { return m_stats; }
     int gameCount(SpeedMask speeds = kAllSpeeds) const;
+    // The player's and their opponents' median rating in these games (0 if none are rated).
+    int medianElo(SpeedMask speeds = kAllSpeeds) const;
+    int medianOpponentElo(SpeedMask speeds = kAllSpeeds) const;
+    // The speed they play most among these games.
+    Speed mostPlayedSpeed(SpeedMask speeds = kAllSpeeds) const;
     std::size_t positionCount() const { return m_positions; }
     std::size_t moveCount() const { return m_occurrences.size(); }
 

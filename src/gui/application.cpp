@@ -35,6 +35,7 @@ Application::Application()
     updateLayout();
     startAnalysis();
     m_playerFiles = findPlayerFiles();
+    loadNetwork();
 }
 
 Application::~Application()
@@ -291,6 +292,21 @@ void Application::pollEngine()
 // ---------------------------------------------------------------------------
 // Player prediction
 
+void Application::loadNetwork()
+{
+    // The model exported by `python -m chessml.export`; takes a fraction of a second to read.
+    const auto path = findModelFile();
+    if (path.empty()) {
+        m_netError = "No network found in ml/models (python -m chessml.export models/medium.pt)";
+        return;
+    }
+    try {
+        m_net = predictor::MoveNet::fromFile(path);
+    } catch (const std::exception& e) {
+        m_netError = e.what();
+    }
+}
+
 void Application::loadPlayer(const std::filesystem::path& path)
 {
     if (path.empty()) return;
@@ -316,14 +332,58 @@ void Application::pollPlayer()
 void Application::refreshPrediction()
 {
     const std::uint64_t key = m_game.board().hash();
-    if (m_book.get() == m_predictionBook && key == m_predictionKey && m_bookSpeed == m_predictionSpeed) return;
+    if (m_book.get() == m_predictionBook && key == m_predictionKey && m_bookSpeed == m_predictionSpeed
+        && m_netElo == m_predictionElo)
+        return;
     m_predictionBook = m_book.get();
     m_predictionKey = key;
     m_predictionSpeed = m_bookSpeed;
+    m_predictionElo = m_netElo;
 
     const predictor::SpeedMask speeds = m_bookSpeed == 0 ? predictor::kAllSpeeds
                                       : predictor::speedBit(static_cast<predictor::Speed>(m_bookSpeed - 1));
     m_prediction = m_book ? m_book->lookup(m_game.board(), speeds) : predictor::BookLookup{};
+
+    // The network takes a few milliseconds, so it runs here, once per position.
+    m_netContext = netContext();
+    m_netPrediction = m_net ? m_net->predict(m_game.board(), m_netContext) : std::vector<predictor::MoveProbability>{};
+    m_combined = predictor::combine(m_prediction, m_netPrediction);
+}
+
+predictor::NetContext Application::netContext() const
+{
+    predictor::NetContext context;
+    if (!m_book) {
+        context.elo = context.opponentElo = m_netElo;
+        return context;
+    }
+    // A player like the one loaded: their usual rating and opponents at the chosen speed.
+    const predictor::SpeedMask speeds = m_bookSpeed == 0 ? predictor::kAllSpeeds
+                                      : predictor::speedBit(static_cast<predictor::Speed>(m_bookSpeed - 1));
+    const int elo = m_book->medianElo(speeds);
+    const int opponent = m_book->medianOpponentElo(speeds);
+    context.elo = elo > 0 ? elo : 1500;
+    context.opponentElo = opponent > 0 ? opponent : context.elo;
+    context.speed = m_book->mostPlayedSpeed(speeds);
+    return context;
+}
+
+std::vector<Application::PredictionRow> Application::predictionRows() const
+{
+    std::vector<PredictionRow> rows;
+    if (!m_net) { // the book alone
+        for (const auto& stat : m_prediction.moves) rows.push_back({stat.move, stat.share, &stat, -1.});
+        return rows;
+    }
+    for (const auto& m : m_combined) {
+        PredictionRow row{m.move, m.probability, nullptr, 0.};
+        for (const auto& stat : m_prediction.moves)
+            if (stat.move == m.move) row.stat = &stat;
+        for (const auto& n : m_netPrediction)
+            if (n.move == m.move) row.network = n.probability;
+        rows.push_back(row);
+    }
+    return rows;
 }
 
 // ---------------------------------------------------------------------------
@@ -437,8 +497,8 @@ BoardScene Application::buildScene() const
     const bool hasSuggestion = m_analysis.depth > 0 && m_analysis.bestMove.move() != chess::Move::NO_MOVE;
     if (m_showArrow && hasSuggestion && showArrows)
         scene.arrow = MoveSquares{m_analysis.bestMove.from(), core::targetSquare(m_analysis.bestMove)};
-    if (m_showPlayerArrow && !m_prediction.empty() && showArrows) {
-        const chess::Move move = m_prediction.moves.front().move;
+    if (m_showPlayerArrow && showArrows && (!m_combined.empty() || !m_prediction.empty())) {
+        const chess::Move move = !m_combined.empty() ? m_combined.front().move : m_prediction.moves.front().move;
         scene.playerArrow = MoveSquares{move.from(), core::targetSquare(move)};
     }
     return scene;
