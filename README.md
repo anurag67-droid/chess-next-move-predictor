@@ -1,6 +1,6 @@
 <div align="center">
 
-# Chess Next Move Predictor
+# Mimic
 
 Predicts the move **a specific human player** will make next: not the best move, but *their* move.
 It learns from the player's own past games and from a neural network, written from scratch in PyTorch
@@ -107,14 +107,14 @@ which `ctest` checks.
 </p>
 
 For contrast, a blue arrow shows the objectively best move, from the search engine of my separate
-[chess-engine](https://github.com/anurag67-droid/chess-engine) project. When the two arrows
+[Kestrel](https://github.com/anurag67-droid/kestrel) project. When the two arrows
 disagree, the player's habit and the best move part ways.
 
 Building needs a C++17 compiler and CMake 3.16+ (SFML 3, Dear ImGui and chess.hpp are submodules):
 
 ```bash
-git clone --recursive https://github.com/anurag67-droid/chess-next-move-predictor.git
-cd chess-next-move-predictor
+git clone --recursive https://github.com/anurag67-droid/mimic.git
+cd mimic
 cmake -S . -B build
 cmake --build build -j
 ./build/ChessNextMovePredictor
@@ -157,7 +157,7 @@ src/, include/
 ├── cli/        player-book     command-line repertoire and accuracy report
 ├── gui/        the desktop app: board, player card, arrows (SFML + Dear ImGui)
 ├── core/       game state, SAN history, FEN, draw rules
-└── engine/     best-move search for the blue arrow (from chess-engine)
+└── engine/     best-move search for the blue arrow (from Kestrel)
 tests/        C++ book tests; ml/tests/ has the Python tests
 ```
 

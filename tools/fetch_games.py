@@ -26,7 +26,7 @@ import urllib.request
 from pathlib import Path
 from typing import Iterable, Iterator
 
-USER_AGENT = "chess-next-move-predictor (+https://github.com/anurag67-droid/chess-next-move-predictor)"
+USER_AGENT = "mimic (+https://github.com/anurag67-droid/mimic)"
 SPEEDS = ("bullet", "blitz", "rapid", "classical", "correspondence")
 PLAYERS_DIR = Path(__file__).resolve().parent.parent / "players"
 

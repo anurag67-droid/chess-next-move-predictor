@@ -18,7 +18,7 @@ import numpy as np
 
 from .encoding import RECORD, clock_bucket, encode_board, legal_move_indices, move_index, speed_id, speed_of
 
-USER_AGENT = "chess-next-move-predictor (+https://github.com/anurag67-droid/chess-next-move-predictor)"
+USER_AGENT = "mimic (+https://github.com/anurag67-droid/mimic)"
 HEADER_RE = re.compile(r'^\[(\w+)\s+"(.*)"\]\s*$')
 
 
